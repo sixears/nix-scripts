@@ -1,0 +1,131 @@
+# -*- mode: shell-script; -*-
+
+{ pkgs, ... }:
+
+pkgs.writers.writeBashBin "flacmeta" ''
+
+# -u: Treat unset variables and parameters other than the special parameters "@"
+#     and "*" as an error when performing parameter expansion.  If expansion is
+#     attempted on an unset variable or parameter, the shell prints an error
+#     message, and, if not interactive, exits with a non-zero status.
+
+# -o pipefail: If set, the return value of a pipeline is the value of the last
+#              (rightmost) command to exit with a non-zero status, or zero if
+#              all commands in the pipeline exit successfully.  This option is
+#              disabled by default.
+
+builtin set -u -o pipefail
+
+# nullglob: If set, bash allows patterns which match no files to expand to a
+#           null string, rather than themselves.
+# dotglob:  If set, bash includes filenames beginning with a . in the results of
+#           pathname expansion.
+builtin shopt -s nullglob
+builtin shopt -s dotglob
+builtin shopt -s extglob
+
+basename=${pkgs.coreutils}/bin/basename
+false=${pkgs.coreutils}/bin/false
+getopt=${pkgs.utillinux}/bin/getopt
+true=${pkgs.coreutils}/bin/true
+
+progname="$($basename "$0")"
+verbose=$false
+dry_run=$false
+
+metaflac=${pkgs.flac}/bin/metaflac
+
+# ------------------------------------------------------------------------------
+
+warn () {
+  echo -e "$1" 1>&2
+}
+
+info () {
+  if $verbose; then
+    echo -e "$1" 1>&2
+  fi
+}
+
+usage () {
+  usage="$(cat <<EOF
+usage: $progname OPTION* FLACFILE+
+
+show flac metadata
+
+options:
+
+ -v | --verbose
+ -n | --dry-run
+ --help
+EOF
+)"
+  die 2 "$usage"
+}
+
+die() {
+  warn "$2"
+  exit $1
+}
+
+go() {
+  exit="$1"; shift
+  if $dry_run; then info "(CMD) $*"; else info "CMD> $*"; fi
+  $dry_run || "$@" || die "$exit" "failed: $*"
+}
+
+goeval() {
+  exit="$1"; shift
+  if $dry_run; then
+    info "(CMD) $*"
+  else
+    info "CMD> $*"
+    eval "$*" || die "$exit" "failed: $*"
+  fi
+}
+
+go() {
+  exit="$1"; shift
+  local cmd
+  cmd="$(showcmd "$@")"
+  if $dry_run; then info "(CMD) $cmd"; else info "CMD> $cmd"; fi
+  $dry_run || "$@" || die "$exit" "failed: $*"
+}
+
+showcmd() {
+  for i in "''${@:1:$(($#-1))}"; do
+    builtin printf '%q ' "$i"
+  done
+  builtin printf '%q\n' "''${@:$(($#))}"
+}
+
+# ------------------------------------------------------------------------------
+
+OPTS=$( $getopt --options vn:                               \
+                --longoptions verbose,dry-run,help          \
+                --name "$progname" -- "$@"                  )
+
+[ $? -eq 0 ] || die 2 "options parsing failed (--help for help)"
+
+# copy the values of OPTS (getopt quotes them) into the shell's $@
+eval set -- "$OPTS"
+
+while true; do
+  case "$1" in
+    -v | --verbose  ) verbose=$true ; shift   ;;
+    --help          ) usage                   ;;
+    # !!! don't forget to update usage !!!
+    -- ) shift; break ;;
+    * ) break ;;
+  esac
+done
+
+main() {
+  go 3 $metaflac --block-type=VORBIS_COMMENT --list "$1"
+}
+
+case $# in
+  0 ) usage ;;
+  * ) for i in "$@"; do main "$i"; done ;;
+esac
+''

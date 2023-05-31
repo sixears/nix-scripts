@@ -1,0 +1,64 @@
+{ pkgs, mp3mk, ... }:
+
+pkgs.writers.writeHaskellBin "mp3make" { libraries = [pkgs.haskellPackages.filemanip]; } ''
+
+{-# LANGUAGE LambdaCase #-}
+
+import Control.Monad       ( filterM, forM_, liftM, mapM, unless, when )
+import Data.Char           ( isSpace )
+import Data.List           ( intercalate, isSuffixOf )
+import Data.Maybe          ( fromMaybe )
+import System.Environment  ( getArgs )
+import System.Exit         ( ExitCode( ExitFailure ), exitWith )
+import System.IO           ( hPutStrLn, stderr )
+import System.FilePath     ( replaceExtension, takeExtension, takeFileName )
+import System.Posix.Env    ( getEnv )
+import System.Posix.Files  ( fileExist, rename )
+import System.Process      ( readProcess )
+import Text.Printf         ( printf )
+
+-- filemanip ---------------------------
+
+import System.FilePath.Glob  ( namesMatching )
+
+-------------------------------------------------------------------------------
+
+xargs = "${pkgs.findutils}/bin/xargs"
+mp3mk = "${mp3mk}/bin/mp3mk"
+
+readM3U :: FilePath -> IO [String]
+readM3U = 
+  -- filter out blank lines and #-comments
+  fmap (filter (not . f) . lines) . readFile
+  where f s = let s' = dropWhile isSpace s 
+               in null s' || head s' == '#'
+
+ePutStrLn :: String -> IO () 
+ePutStrLn e = hPutStrLn stderr e
+
+die :: String -> Int -> IO ()
+die e r = ePutStrLn e >> exitWith (ExitFailure r)
+
+main :: IO ()
+main = do
+  cpu_count <-fmap (read . Data.Maybe.fromMaybe "2") $ getEnv "CPU_COUNT"
+  args <- getArgs >>= \case
+                        [] -> namesMatching "*.flac"
+                        xs -> return xs
+  
+  inputs <- mapM (\ f -> if ".m3u" `isSuffixOf` f then readM3U f else return [f]) args
+  let todo = filter (not . ((== ".mp3") . takeExtension)) $ concat inputs
+  when (null todo) (die "no files found" 1)
+  missing <- mapM (liftM not . fileExist) todo
+  fileMap <- filterM (\ (_,f) -> (liftM not . fileExist) f) $ fmap (\f -> (takeFileName f, f)) $ map ((flip replaceExtension) ".mp3") todo
+  when (null fileMap) (die "nothing to do" 1)
+  let outputs = concatMap (\ (a,b) -> [a,b]) fileMap
+  extant <- filterM fileExist outputs
+  unless (null extant) $ die ("file(s) exist: " ++ (intercalate ", " extant)) 3
+  forM_ todo (\fn -> ePutStrLn $ printf "encoding: %s" fn)
+  out <- readProcess xargs [ "-0", "-n", "1", "-P", show (cpu_count+1), mp3mk ]
+                           (intercalate "\0" $ todo)
+  putStrLn out
+  forM_ fileMap (\ (src, targ) -> ePutStrLn (printf "%s -> %s" src targ) >> rename src targ)
+  
+''

@@ -1,0 +1,204 @@
+{ pkgs, ... }:
+
+pkgs.writers.writeBashBin "music-rename" ''
+
+# -u: Treat unset variables and parameters other than the special parameters "@"
+#     and "*" as an error when performing parameter expansion.  If expansion is
+#     attempted on an unset variable or parameter, the shell prints an error
+#     message, and, if not interactive, exits with a non-zero status.
+
+# -o pipefail: If set, the return value of a pipeline is the value of the last
+#              (rightmost) command to exit with a non-zero status, or zero if
+#              all commands in the pipeline exit successfully.  This option is
+#              disabled by default.
+
+builtin set -u -o pipefail
+
+# nullglob: If set, bash allows patterns which match no files to expand to a
+#           null string, rather than themselves.
+# dotglob:  If set, bash includes filenames beginning with a . in the results of
+#           pathname expansion.
+builtin shopt -s nullglob
+builtin shopt -s dotglob
+
+basename=${pkgs.coreutils}/bin/basename
+false=${pkgs.coreutils}/bin/false
+getopt=${pkgs.utillinux}/bin/getopt
+true=${pkgs.coreutils}/bin/true
+
+progname="$($basename "$0")"
+verbose=0
+dry_run=$false
+
+exiftool=${pkgs.perlPackages.ImageExifTool}/bin/exiftool
+iconv=${pkgs.glibc.bin}/bin/iconv
+jq=${pkgs.jq}/bin/jq
+mv=${pkgs.coreutils}/bin/mv
+tr=${pkgs.coreutils}/bin/tr
+
+# ------------------------------------------------------------------------------
+
+warn () {
+  echo -e "$1" 1>&2
+}
+
+info () {
+  if [ 0 -lt $verbose ]; then
+    echo -e "$1" 1>&2
+  fi
+}
+
+info2 () {
+  if [ 1 -lt $verbose ]; then
+    echo -e "$1" 1>&2
+  fi
+}
+
+usage () {
+  usage="$(cat <<EOF
+usage: $progname OPTION* MUSIC-FILE
+
+rename a music file, per its tags
+
+options:
+ -a | --artist   include artist in file name
+
+ -v | --verbose  may be used multiple times for increased verbosity
+ -n | --dry-run
+ -h | --help
+EOF
+)"
+  die 2 "$usage"
+}
+
+die() {
+  warn "$2"
+  exit $1
+}
+
+go() {
+  exit="$1"; shift
+  if $dry_run; then info "(CMD) $*"; else info "CMD> $*"; fi
+  $dry_run || "$@" || die "$exit" "failed: $*"
+}
+
+goeval() {
+  exit="$1"; shift
+  if $dry_run; then
+    info "(CMD) $*"
+  else
+    info "CMD> $*"
+    eval "$*" || die "$exit" "failed: $*"
+  fi
+}
+
+go() {
+  exit="$1"; shift
+  if $dry_run; then info "(CMD) $*"; else info "CMD> $*"; fi
+  $dry_run || "$@" || die "$exit" "failed: $*"
+}
+
+# ------------------------------------------------------------------------------
+
+OPTS=$( $getopt --options vhnaD:                            \
+                --longoptions verbose,dry-run,help          \
+                --longoptions artist,digits:                \
+                --name "$progname" -- "$@"                  )
+
+[ $? -eq 0 ] || die 2 "options parsing failed (--help for help)"
+
+# copy the values of OPTS (getopt quotes them) into the shell's $@
+eval set -- "$OPTS"
+
+use_artist=$false
+digits=2
+while true; do
+  case "$1" in
+    -a | --artist   ) use_artist=$true       ; shift   ;;
+
+    -v | --verbose  ) verbose=$((verbose+1)) ; shift   ;;
+    -h | --help     ) usage                            ;;
+    -n | --dry-run  ) dry_run=$true          ; shift   ;;
+    -D | --digits   ) digits="$(($2+0))"     ; shift 2 ;;
+    # !!! don't forget to update usage !!!
+    -- ) shift; break ;;
+    * ) break ;;
+  esac
+done
+
+join() {
+  # $1 is return variable name
+  # $2 is sep
+  # $3... are the elements to join
+  local retname=$1 sep=$2 ret=$3
+  shift 3 || shift $(($#))
+  printf -v "$retname" "%s" "$ret''${@/#/$sep}"
+}
+
+main() {
+  input="$1"
+  if [[ "$input" =~ ^((.*)/)?([[:digit:]]+)([\ -.]+)(([^/]*)'.')?(mp3|MP3|flac|FLAC|ogg|OGG)$ ]]; then
+    indir="''${BASH_REMATCH[2]:-.}"
+    innum="''${BASH_REMATCH[3]:-.}"
+    instub="''${BASH_REMATCH[6]}"
+    inext="''${BASH_REMATCH[7]}"
+
+    artist="$("$exiftool" -json "$input" | "$jq" --raw-output '.[0].Artist')"
+#   Song-title doesn't include live info
+#    title="$("$exiftool" -json "$input" | "$jq" --raw-output '.[0]."Song-title" // .[0].Title')"
+    title="$("$exiftool" -json "$input" | "$jq" --raw-output '.[0].Title')"
+    track="$("$exiftool" -json "$input" | "$jq" --raw-output 'if .[0].Track then .[0].Track | split("/") | .[0] else .[0].TrackNumber | split("/") | .[0] | tonumber end')"
+
+    local -a titles=();
+    local delimiter='  '
+    local s="$title$delimiter"
+    while [[ $s ]]; do
+       titles+=( "''${s%%"$delimiter"*}" )
+       s="''${s#*"$delimiter"}"
+    done
+
+    local t
+    local -a ts=()
+    for t in "''${titles[@]}"; do
+      while [[ $t =~ ^([[(<]?)([^][()<>]*),([^][()<> ]+)([])>])?$ ]]; do
+        t="''${BASH_REMATCH[1]}''${BASH_REMATCH[3]} ''${BASH_REMATCH[2]}''${BASH_REMATCH[4]}"
+      done
+      ts+=( "$t" )
+    done
+    join title '  ' "''${ts[@]}"
+
+    info2 "ARTIST: '$artist'"
+    info2 "TITLE : '$title'"
+    info2 "TRACK : '$track'"
+    info2 "EXT   : '$inext'"
+    info2 "DIGITS: '$digits'"
+
+    if $use_artist; then
+      # The $((10#)) converts from base-10 to base-10 in an arithmetic context,
+      # causing any leading zeroes to be dropped; this is needed because printf
+      # interprets 08 as an invalid octal number.
+      target="$indir/$(builtin printf '%0'"''${digits}"'d-%s-%s.%s'         \
+                               $((10#$track)) "$artist" "$title" "$inext"   \
+                         | $iconv -f utf-8 -t ascii//TRANSLIT               \
+                         | $tr / -)"
+    else
+      target="$indir/$(builtin printf '%0'"''${digits}"'d-%s.%s'    \
+                               $((10#$track)) "$title" "$inext"     \
+                         | $iconv -f utf-8 -t ascii//TRANSLIT       \
+                         | $tr / -)"
+    fi
+
+    if [ "x''${input#./}" != "x''${target#./}" ]; then
+      info "$(builtin printf '%-38s -> %s' "''${input#./}" "''${target#./}")"
+      $dry_run || $mv "$input" "$target" || die 4 "failed: $mv $input $target"
+    fi
+  else
+    die 3 "no recognized extension found for '$input'"
+  fi
+}
+
+case $# in
+  0 ) usage ;;
+  * ) for i in "$@"; do main "$i"; done ;;
+esac
+''

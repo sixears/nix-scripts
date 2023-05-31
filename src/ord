@@ -1,0 +1,13 @@
+# -*- mode: perl -*-
+
+{ pkgs, ... }:
+
+pkgs.writers.writePerlBin "ord" { libraries = []; }
+''
+use 5.30.0;
+use strict;
+
+for (@ARGV) {
+  printf "$_\t0%03o\tx%04x\t%5d\n",ord($_),ord($_),ord($_)
+}
+''

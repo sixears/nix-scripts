@@ -1,0 +1,263 @@
+# -*- mode: shell-script -*-
+
+{ pkgs, ... }:
+
+pkgs.writers.writeBashBin "dd-usb" ''
+# -u: Treat unset variables and parameters other than the special parameters "@"
+#     and "*" as an error when performing parameter expansion.  If expansion is
+#     attempted on an unset variable or parameter, the shell prints an error
+#     message, and, if not interactive, exits with a non-zero status.
+
+# -o pipefail: If set, the return value of a pipeline is the value of the last
+#              (rightmost) command to exit with a non-zero status, or zero if
+#              all commands in the pipeline exit successfully.  This option is
+#              disabled by default.
+
+PATH=/dev/null
+set -u -o pipefail
+
+# nullglob: If set, bash allows patterns which match no files to expand to a
+#           null string, rather than themselves.
+# dotglob:  If set, bash includes filenames beginning with a . in the results of
+#           pathname expansion.
+shopt -s nullglob
+shopt -s dotglob
+
+declare -A CMD
+CMD[basename]=${pkgs.coreutils}/bin/basename
+# Always use single words here; for anything more, use a function.
+# This ensures we don't have to worry about quoting when we use ''${CMD[cmd]}
+CMD[cat]=${pkgs.coreutils}/bin/cat
+CMD[date]=${pkgs.coreutils}/bin/date
+CMD[getopt]=${pkgs.utillinux}/bin/getopt
+
+CMD[dd]=${pkgs.coreutils}/bin/dd
+CMD[pv]=${pkgs.pv}/bin/pv
+CMD[readlink]=${pkgs.coreutils}/bin/readlink
+CMD[stat]=${pkgs.coreutils}/bin/stat
+
+progname="$(''${CMD[basename]} "$0")"
+verbose=false
+dry_run=false
+debug=false
+
+# ------------------------------------------------------------------------------
+
+debug() {
+  $debug || return
+  for i in "$@"; do
+    warn "<DEBUG> $i"
+  done      
+}
+
+warn () {
+  local date=$(''${CMD[date]} +%FZ%T)
+  local i
+  for i in "$@"; do
+    echo -e "[$date $progname] $i" 1>&2
+  done
+}
+
+info () {
+  if $verbose; then
+    warn "$@"
+  fi
+}
+
+usage () {
+  _usage="$(''${CMD[cat]} <<EOF
+USAGE: $progname OPTION* INPUT-FILE OUTPUT-DEVICE
+
+Write an image to a usb disk, with progress.  The output device should be of the
+form /dev/sdX, and must be a USB device.
+
+OPTIONS:
+ -v | --verbose
+ -n | --dry-run
+ --debug
+ --help
+EOF
+)"
+  die 2 "$_usage"
+}
+
+die() {
+  warn "''${@:2}"
+  exit $1
+}
+
+dieusage() { die 2 "$@"; }
+
+_go() {
+  # getopt bug: there must be a -o provided, even if it is empty; else it will
+  # take the first provided argument not beginning with '-', and treat that as
+  # an argument to -o !
+  local -a getopt_opts=( --options ""
+			 --long exit:,no-dry-run,eval,no-exit,expect:,cmd: )
+  local -a getopt_cmd=( ''${CMD[getopt]} "''${getopt_opts[@]}" -- "$@" )
+  local -a opts=$( "''${getopt_cmd[@]}" ); local rv=$?
+
+  if [ 0 -ne $rv ]; then
+    local msg=
+    dieinternal "$(loc): options parsing failed ($rv)"
+  fi
+
+  # copy the values of OPTS (getopt quotes them) into the shell's $@
+  eval set -- "$opts"
+
+  local no_exit=false
+  local expect=()
+  local exit=""
+  local dryrun=$dry_run
+  local eval=false
+  local usecmd=""
+  local -a cmd
+  while [[ 0 -ne $# ]]; do
+    case "$1" in
+      --exit       ) exit="$2"            ; shift 2 ;;
+      --no-exit    ) no_exit=true         ; shift   ;;
+      --expect     ) IFS=, expect+=("$2") ; shift 2 ;;
+      --no-dry-run ) dryrun=false         ; shift   ;;
+      --eval       ) eval=true            ; shift   ;;
+      --cmd        ) usecmd="$2"          ; shift 2 ;;
+      --           ) cmd+=("''${@:2}")      ; break   ;;
+      *            ) cmd+=("$1")          ; shift   ;;
+    esac
+  done
+
+  if ! $no_exit && [[ x == $exit ]]; then
+    dieinternal "$(loc: specify --exit <VAL> or --no-exit)"
+  fi
+
+  if [ 0 -eq ''${#expect[@]} ]; then
+    expect=(0)
+  fi
+
+  if [[ x != x$usecmd ]]; then
+    if [[ -v CMD[$usecmd] ]]; then
+      cmd=(''${CMD[$usecmd]} "''${cmd[@]}")
+    else
+      dieinternal "$loc: called with non-extant CMD '$usecmd'" 
+    fi
+  fi
+  
+  local -A expects
+  local e
+  for e in "''${expect[@]}"; do
+    expects["$e"]=1
+  done  
+
+  cmdstr="$(showcmd "''${cmd[@]}")"
+  if $dryrun; then
+    info "(CMD) $cmdstr"
+  else
+    info "CMD> $cmdstr"
+    if $eval; then eval "''${cmd[@]}"; else "''${cmd[@]}"; fi; rv=$?
+    if ! $no_exit && [[ ! -v expects[$rv] ]]; then
+      die "$exit" "failed: $cmdstr"
+    fi
+  fi
+}
+
+gonodryrun() {
+  exit="$1"; shift
+  local cmd
+  cmd="$(showcmd "$@")"
+  info "CMD> $cmd"
+  "$@" || die "$exit" "failed: $*"
+}
+
+go() {
+  _go --exit "$1" -- "''${@:2}"
+}
+
+gocmd() {
+  if [[ -v CMD[$2] ]]; then
+    go "$1" "''${CMD[$2]}" "''${@:3}";
+  else
+    die 255 "''${FUNCNAME[0]} called with non-extant CMD '$2' at ''${BASH_SOURCE[0]}:''${BASH_LINENO[0]}"
+  fi
+}
+
+gocmdnodryrun() {
+  if [[ -v CMD[$2] ]]; then
+    gonodryrun "$1" "''${CMD[$2]}" "''${@:3}";
+  else
+    die 255 "''${FUNCNAME[0]} called with non-extant CMD '$2' at ''${BASH_SOURCE[0]}:''${BASH_LINENO[0]}"
+  fi
+}
+
+gocmd() { go "$1" "''${CMD[$2]}" "''${@:3}"; }    
+
+showcmd() {
+  if [ 0 -lt $# ]; then
+    for i in "''${@:1:$(($#-1))}"; do
+      printf '%q ' "$i"
+    done
+    printf '%q\n' "''${@:$(($#))}"
+  fi
+}
+
+# ------------------------------------------------------------------------------
+
+main() {
+  input="$1"
+  output="$2"
+
+  if ! [[ $output =~ ^/dev/sd[a-z]$ ]]; then
+    die 2 "for safety, please output to /dev/sdX"
+  fi
+
+  readlink=( ''${CMD[readlink]} --canonicalize-existing /dev/disk/by-id/usb-* )
+  mapfile -t usbs < <( "''${readlink[@]}" )
+  found=false
+  for usb in "''${usbs[@]}"; do
+    if [[ $output == $usb ]]; then
+      found=true
+      break
+    fi
+  done
+
+  $found || die 2 "not a usb device: '$output'"
+  
+  gocmd 4 dd if="$input" | \
+    gocmd 5 pv -tpreb -s $( gocmdnodryrun 7 stat --format %s "$input" ) | \
+    gocmd 6 dd of="$output" bs=4k
+  rv=$?
+  [ 0 -eq $rv ] || die $rv "dd/pv failed ($rv)"
+}
+
+# ------------------------------------------------------------------------------
+
+orig_args=("$@")
+getopt_cmd=( ''${CMD[getopt]} --options vn --long verbose,debug,dry-run,help
+                            --name "$progname" -- "$@" )
+OPTS=$( "''${getopt_cmd[@]}" )
+
+[ $? -eq 0 ] || die 2 "options parsing failed (--help for help)"
+
+# copy the values of OPTS (getopt quotes them) into the shell's $@
+eval set -- "$OPTS"
+
+args=()
+while [[ 0 -ne $# ]]; do
+  case "$1" in
+    # !!! don't forget to update usage !!!
+    -v | --verbose  ) verbose=true ; shift    ;;
+    -n | --dry-run  ) dry_run=true ; shift    ;;
+    --debug         ) debug=true   ; shift    ;;
+    --help          ) usage                   ;;
+    --              ) args+=("''${@:2}"); break ;;
+    *               ) args+=("$1"); shift     ;;
+  esac
+done
+
+debug "CALLED AS: $0 $(showcmd "''${orig_args[@]}")"
+
+case "''${#args[@]}" in
+  2 ) main "''${args[@]}" ;;
+  * ) usage             ;;
+esac
+
+# -- that's all, folks! --------------------------------------------------------
+''

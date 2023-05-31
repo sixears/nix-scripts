@@ -1,0 +1,275 @@
+# -*- mode: perl -*-
+
+{ pkgs, ... }:
+
+pkgs.writers.writePerlBin "hb" { libraries = [ pkgs.perlPackages.IPCSystemSimple
+                                               pkgs.perlPackages.Readonly
+                                             ]; }
+''
+# !!! for troublesome file names - e.g., with colons in them - rip to another name, and rename.
+# !!! HandBrakeCLI will segfault on the colons
+# !!! mplayer will truncate any filename with a ',' in it at the ',' on output
+
+  # make -2, -ac default
+# require one or more -a; -P; -S or -s or --no-subs or something
+
+=pod
+
+for i in *.mkv; do  mkvextract tracks "$i" 2:"''${i%mkv}aac"; done && \
+  for i in *.aac; do faad "$i" -o "''${i%aac}wav"; done            && \
+  flac --replay-gain --best *.wav                                && \
+  rm -f *.{aac,wav}                                              && \
+  moose --type=flac *.flac
+
+for i in *.mkv; do  mkvextract tracks "$i" 2:"''${i%mkv}ac3"; done   && \
+## ffmpeg converts ac3 to integer-based wavs that flac can handle
+ffmpeg -i track-012.ac3 test.wav
+
+  for i in *.ac3; do mplayer -ao pcm:file=foo.wav "$i" && mv foo.wav "''${i%ac3}wav" || break; done && \
+  flac --replay-gain --best *.wav                                  && \
+  rm -f *.{ac3,wav}                                                && \
+  moose --type=flac *.flac
+
+=cut
+
+# e.g., to rip Banshee disc 2
+# hb -v -a 1 -s 1 -i 1 2='Meet the New Boss' 3='Half Deaf is Better than All Dead' 4='The Kindred'
+
+use 5.10.0;
+use strict;
+use warnings;
+no warnings 'experimental';
+
+# autodie: open blows up on multi-arg opens
+use autodie              qw( close mkdir open );
+use Getopt::Long         qw( GetOptions
+                             :config no_ignore_case bundling
+                                     prefix_pattern=--|- );
+use IPC::System::Simple  qw( systemx );
+use Readonly             qw( Readonly );
+
+Readonly my $DVD_DEV   => '/dev/sr0';
+
+# Readonly my $LD_LIBRARY_PATH_NIX =>
+#   '/nix/store/5fwgbc89xmzav91zdy6xmc19g8f0xych-x265-1.9/lib';
+Readonly my $HANDBRAKE => "${pkgs.handbrake}/bin/HandBrakeCLI";
+# Readonly my $HANDBRAKE_NIX => '/home/martyn/.nix-profile/bin/HandBrakeCLI';
+
+# encoding profile
+my $Profile = 'Normal';
+# add this to chapter# to get the output number
+my $InputOffset = 0;
+my ($Verbose, $DryRun);
+my (@Audio, @Subs, $DefaultSubs, $Scan, $Overwrite, $Fn, $AudioCopy, $NoNumber);
+my ($Series, $SeriesNum, $NoChapters);
+my %TitleOffset; # map from title num to offset to add to chapters output
+# Only really valid with a chapters map; uses the title as the output directory
+# (remember to replace /:) into which files are written
+my $TitleAsDir;
+my $Device = $DVD_DEV;
+my @Chapters;
+my $Quality;
+my $TwoPass;
+GetOptions('audio|a=i'          => \@Audio,
+           'subs|subtitles|s=i' => \@Subs,
+           'default-subs|default-subtitle|S=i'
+                                => \$DefaultSubs,
+           'input-offset|i=i'   => \$InputOffset,
+           'file|f=s'           => \$Fn,
+           'series|E=s'         => \$Series,
+           'seriesnum|e=i'      => \$SeriesNum,
+           'dry-run|n'          => \$DryRun,
+           'verbose|v'          => \$Verbose,
+           'scan=i'             => \$Scan,
+           'profile|P=s'        => \$Profile, # e.g., 'H.265 MKV 576p25'
+           'overwrite|O'        => \$Overwrite,
+           # offset chapter numbers; makes sense only with -f
+           'title-offset|t=s'   => \%TitleOffset,
+           'title-as-dir|T'     => \$TitleAsDir,
+           '2'                  => \$TwoPass,  # make this default, with one-pass option
+           'audio-copy|ac'      => \$AudioCopy,
+           'no-number|N'        => \$NoNumber,
+           'device|D=s'         => \$Device,
+           'no-chapters|nc'     => \$NoChapters,
+           'quality|q=i'        => \$Quality, # 20 is default, use 26 for 1080p
+           'chapters|c=s'         => sub { push @Chapters, split /,/, $_[1] },
+          )
+  or die "options parsing failed\n";
+
+die "please provide both --series|-E and --seriesnum|-e or neither\n"
+  if $Series xor defined $SeriesNum;
+die "we do not currently handle --series|-E with --file|-f\n"
+  if $Series and $Fn;
+die "--title-offset|-t makes sense only with -f\n"
+  if keys %TitleOffset and ! $Fn;
+die "title offset '$_' is not valid; must be a positive integer\n"
+  for grep !/^\d+$/, %TitleOffset;
+die "--no-number|-N does not mix with --input-offset|-i\n"
+  if $NoNumber and $InputOffset;
+die "--no-number|-N does not mix with --title-offset|-t\n"
+  if $NoNumber and keys %TitleOffset;
+die "chapter '$_' is not a number\n"
+  for grep !/^\d+(?:-\d+)?$/, @Chapters;
+
+unshift @Subs, $DefaultSubs
+  if $DefaultSubs and ! grep $_ == $DefaultSubs, @Subs;
+
+my %tracks;
+
+if ( defined $Fn ) {
+  open my $fh, '<', $Fn;
+  my $last_title;
+  my $last_chapter;
+  while ( <$fh> ) {
+    chomp;
+    given ( $_ ) {
+      when ( /^\s*(?:#.*)?$/ ) { } # ignore blank lines & comments
+      when ( /^(\d+) - (.*)$/ ) { $tracks{$1} = $2; $last_title = $1; undef $last_chapter }
+      when ( /^  (?:(?<chapnum>\d+) )?- (?<chapname>.*)/ ){
+        my ($chapnum, $chapname) = @+{qw( chapnum chapname )};
+        $chapnum //= ($last_chapter // 0) + 1;
+        my $t = $tracks{$last_title}
+          or die "cannot handle chapters without a title on line $. ($_)\n";
+        $tracks{$last_title} = { title => $t, chapters => [] }
+          unless ref $t;
+        my $prev = $tracks{$last_title}->{chapters}->[$chapnum];
+        die "title $last_title chapter $1 already set to '$prev'\n"
+          if defined $prev;
+        $tracks{$last_title}->{chapters}->[$chapnum] = $chapname;
+        $last_chapter = $chapnum;
+      }
+      default { die "cannot parse line $.: '$_'\n" }
+    }
+  }
+}
+
+my @DoTitles;
+
+if ( defined $Scan ) {
+  if ( 0 == $Scan ) {
+    # 2>&1 | less
+#    open STDOUT, '|-', '/usr/bin/less', -j => 10, '+/^  \\+ duration:', '+>'
+#      or die "failed to open to less: $!\n";
+#    close STDERR;
+#    open STDERR, '>&STDOUT'
+#      or die "failed to reopen STDERR: $!\n";
+  }
+
+  %tracks = ($Scan => ""); # something for the master for loop to feed on
+} else {
+  die "select an audio track\n"
+    unless @Audio;
+
+  for my $a (@ARGV) {
+    if ( ! $Fn and $a =~ /^(\d+)=(.*)$/ ) {
+      die "already set: $1\n"
+        if exists $tracks{$1};
+      $tracks{$1} = $2;
+    } elsif ( $Fn and $a =~ /^(\d+)$/ ) {
+      die "no such title: $1\n"
+        unless exists $tracks{$1};
+      die "already set: $1\n"
+        if grep $1 == $_, @DoTitles;
+      push @DoTitles, $1;
+    } else {
+      die "not parsed: $a\n";
+    }
+  }
+
+  $DefaultSubs //= $Subs[0]
+    if @Subs;
+}
+
+die "title offset $TitleOffset{$_} is defined for non-track $_"
+  for grep ! exists $tracks{$_}, keys %tracks;
+
+my $last_chapter = 0;
+my @TrackOrder = @DoTitles ? @DoTitles : sort { $a <=> $b } keys %tracks;
+# for each track, either titles from cmdline or tracks named in file
+for my $t (@TrackOrder) {
+  # ignore this $t if tracks were taken from an input file, and --title-offset
+  # was used but not for this title
+  next if  ! @TrackOrder and keys %TitleOffset and ! exists $TitleOffset{$t};
+
+  my $title = defined $Scan ? '*SCAN*' : $tracks{$t};
+  my @chapters;
+  if ( ref $title ) {
+    @chapters = @{$title->{chapters}};
+    $title    = $title->{title};
+  }
+
+  @chapters = ("") if ! @chapters or $NoChapters;
+  @chapters = @Chapters if @Chapters;
+
+  for my $c (grep defined $chapters[$_], 0..$#chapters) {
+    my @cmd = ($HANDBRAKE, -i => $Device, -t => $t);
+    my $outfn = sprintf '%s.mkv', $chapters[$c] || $title;
+    $outfn = sprintf '%02d-%s', $t+$InputOffset, $outfn
+      unless $NoNumber;
+    $outfn =~ tr!/:!--!; # HandBrakeCLI doesn't like files with ':' in them; it will crash
+    if ( $Series ) {
+      $outfn = length $title ? (sprintf '%s - %02dx%02d - %s.mkv', $Series, $SeriesNum, $t+=$InputOffset, $title)
+                             : (sprintf '%s - %02dx%02d.mkv', $Series, $SeriesNum, $t+=$InputOffset);
+      $outfn =~ tr!/!-!;
+    } elsif ( $chapters[$c] ) {
+      my $i = keys %TitleOffset ? ($TitleOffset{$t}//0) + $c : ++$last_chapter;
+      $outfn = sprintf '%02d-%s.mkv', $i, $chapters[$c] || $title;
+      $outfn =~ tr!/!-!;
+      if ( $TitleAsDir ) {
+        (my $dir = $title) =~ tr!/!-!;
+        state %dirs_made;
+        if ( -e $dir ) {
+          die "not a directory: '$dir'"
+            unless -d $dir;
+        } elsif ( ! exists $dirs_made{$dir} ) { # protect against repeated warnings of dirs made in dry-run mode
+          say STDERR "making $dir/"
+            if $Verbose;
+          mkdir $dir
+            unless $DryRun;
+          $dirs_made{$dir} = undef;
+        }
+
+        $outfn = "$dir/$outfn";
+      }
+    }
+
+    push @cmd, '--chapters' => $c # $chapters[$c]
+      if $chapters[$c];
+
+
+    push @cmd, '-2', '-T'
+      if $TwoPass;
+
+    push @cmd, defined($Scan) ? ('--scan' => '--title' => $Scan)
+                              : ( '--markers'           # chapter markers
+                                , '--preset' => $Profile
+                                , '--deinterlace'
+                                , '--audio' => join(',', @Audio))
+                     ;
+    unless ( defined $Scan ) {
+      push @cmd, -s => join ',', @Subs
+        if @Subs;
+      push @cmd, '--subtitle-default' => $DefaultSubs
+        if @Subs;
+      push @cmd, '--quality' => $Quality
+        if $Quality;
+    }
+    push @cmd, -E => 'copy'
+      if $AudioCopy;
+
+    if ( -e $outfn and ! $Overwrite ) {
+      warn "not overwriting extant $outfn\n";
+    } else {
+      push @cmd, -o => $outfn
+        unless $Scan;
+
+      say STDERR join ' ', 'CMD>', @cmd
+        if $Verbose;
+      systemx @cmd
+        unless $DryRun;
+    }
+  }
+}
+
+close STDOUT; # die if less errors
+''

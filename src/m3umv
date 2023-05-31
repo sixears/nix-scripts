@@ -1,0 +1,225 @@
+{ pkgs, execs, header, music, ... }: pkgs.writers.writeBashBin "m3umv" ''
+
+set -u -o pipefail -o noclobber;
+shopt -s nullglob
+shopt -s nullglob
+shopt -s dotglob
+
+source ${header}
+
+Cmd[execs]=${execs}/bin/execs
+Cmd[id3v2]=${pkgs.id3v2}/bin/id3v2
+Cmd[music]=${music}/bin/music
+Cmd[perl]=${pkgs.perl}/bin/perl
+
+MP3ARCHIVE=/MP3-Archive
+Archive=$MP3ARCHIVE/BY-ARTIST
+
+# ------------------------------------------------------------------------------
+
+addCmd () {
+  local tmpfn="$1"; shift
+  local i
+  for i in "$@"; do
+    echo -n "$i" >> "$tmpfn"
+    echo -en '\0' >> "$tmpfn"
+  done
+
+  echo -en '\0' >> "$tmpfn"
+}
+
+# --------------------------------------
+
+main() {
+  local -a args=("$@")
+
+  local tmpfn
+  mktemp --no-dry-run tmpfn
+
+  # list of files to make before doing the move
+  local -a premake=()
+
+  for m3u in "''${args[@]}"; do
+    local m3ud # will be the directory of $m3u, fully resolved
+    m3ud="$(gocmdnodryrun 13 dirname "$(gocmdnodryrun 13 realpath "$m3u")")"
+    # FAT filesystem (on Android, at least) does not cope well with '.' at the end of a
+    # dirname
+    while [[ $m3ud =~ \.$ ]]; do
+      m3ud="''${m3ud%.}"
+    done
+    warn "d: $m3ud / i: $m3u"
+
+    local album
+    album="$(gocmdnodryrun 16 basename "$m3u" .m3u)"; check_ basename
+    if [[ ''${album:0:1} == [ ]]; then
+      album="''${album#*\] - }"
+    fi
+
+    local r
+    r="$(gocmdnodryrun 17 tr --delete ':?"*&' <<< "$(gocmdnodryrun 18 basename "$m3ud")/$(gocmdnodryrun 19 basename "$m3u" .m3u)")"
+    check_ 'tr <<< basename/basename'
+
+    # FAT filesystem (on Android, at least) does not cope well with '.' at the end of a
+    # dirname
+    while [[ $r =~ \.$ ]]; do
+      warn "r: >>$r>> (''${r%.})"
+      r="''${r%.}"
+    done
+
+    local t="$Archive/$r"
+
+    addCmd "$tmpfn" "''${Cmd[mkdir]}" -p "$t"
+    local -a fns=()
+    local f
+    while read f; do
+      fns+=("$f")
+    done < <(gocmdnodryrun 20 grep -Ev '^[ 	]*(#.*)?$' "$m3u")
+
+    local nn=''${#fns[@]}
+    local n=1
+    for f in "''${fns[@]}"; do
+      if [[ "$f" =~ ^((.*)/)?([[:digit:]]+)([\ .-]+)(([^/]*)'.')?(mp3|MP3|flac|FLAC|ogg|OGG)$ ]]; then
+        local indir="''${BASH_REMATCH[2]:-.}"
+        local innum="''${BASH_REMATCH[3]:-.}"
+        local instub="''${BASH_REMATCH[6]}"
+        local inext="''${BASH_REMATCH[7]}"
+
+        case "$inext" in
+          flac  ) local mp3="$indir/$innum-$instub.mp3"
+                  if [ ! -e "$f" ]; then
+                    die 7 "'$f' does not exist"
+                  elif [ ! -e "$mp3" ]; then
+                    premake+=("$mp3")
+                  fi
+
+                  local tt
+                  tt="$t/$(gonodryrun 21 printf '%02d-%s.mp3' $n "$instub" | gocmdnodryrun 22 tr --delete ':?"*&')"
+                  check_ 'printf | tr'
+                  echo "$(gonodryrun 22 printf '%-60s -> %s' "$mp3" "$tt")"
+                  check_ printf
+                  addCmd "$tmpfn" "''${Cmd[mv]}" "$mp3" "$tt"
+                  addCmd "$tmpfn" "''${Cmd[chmod]}" u+w "$tt"
+                  addCmd "$tmpfn" "''${Cmd[id3v2]}" --id3v2-only --track "$n/$nn" "$tt"
+                  addCmd "$tmpfn" "''${Cmd[id3v2]}" --id3v2-only --album "$album" "$tt"
+                  if [[ -n $artist ]]; then
+                    addCmd "$tmpfn" "''${Cmd[id3v2]}" --id3v2-only --TPE2 "$artist" "$tt"
+                  fi
+                  ;;
+
+          mp3  ) local mp3="$indir/$innum-$instub.mp3"
+                 if [[ -e $mp3 ]] || $DryRun; then
+                   local tt
+                   tt="$t/$(go 23 printf '%02d-%s.mp3' $n "$instub" | gocmd 44 tr --delete ':?"*&')"
+                   check_ 'printf | tr'
+                    echo "$(go 24 printf '%-60s -> %s' "$mp3" "$tt")"
+                    addCmd "$tmpfn" "''${Cmd[cp]}" "$mp3" "$tt"
+                    addCmd "$tmpfn" "''${Cmd[chmod]}" u+w "$tt"
+                    addCmd "$tmpfn" "''${Cmd[id3v2]}" --id3v2-only --track "$n/$nn" "$tt"
+                    addCmd "$tmpfn" "''${Cmd[id3v2]}" --id3v2-only --album "$album" "$tt"
+                    if [[ -n $artist ]]; then
+                      addCmd "$tmpfn" "''${Cmd[id3v2]}" --id3v2-only --TPE2 "$artist" "$tt"
+                    fi
+                  else
+                    die 7 "mp3 '$mp3' does not exist ($m3u)"
+                  fi
+                ;;
+
+          *     ) die 6 "unrecognized extension '$inext' on '$f' in '$m3u'" ;;
+        esac
+      else
+        die 5 "unrecognized file '$f' in '$m3u'"
+      fi
+      n=$(($n+1))
+    done # for f in "''${fns[@]}"
+
+    local u
+    for u in "''${users[@]}"; do
+      local ut="$MP3ARCHIVE/$u/BY-ARTIST/$r"
+      local ud
+      ud="$(gocmd 25 dirname "$ut")"; check_ dirname
+      if [[ ! -e $ud ]]; then
+        info "+ $ud"
+        addCmd "$tmpfn" "''${Cmd[mkdir]}" "$ud"
+      fi
+      local l="../../../BY-ARTIST/$r/"
+      info "$l ~> $ut"
+      addCmd "$tmpfn" "''${Cmd[ln]}" -s "$l" "$ut"
+    done
+  done # for i in "$@"
+
+  info "*> ''${Cmd[music]} ''${premake[*]}"
+  while read a; do info ":> $a"; done < <( ''${Cmd[perl]} -plE 's!\0\0!\n!g;s!\0! !g' "$tmpfn" )
+
+  case ''${#premake[@]} in
+    0 ) gocmd 8 execs < "$tmpfn"
+        ;;
+    * ) { for i in "''${Cmd[music]}" "''${premake[@]}"; do go 26 echo -en "$i\0"; done; go 27 echo -en '\0'; gocmd 28 cat "$tmpfn"; } | gocmd 29 execs
+        ;;
+  esac
+}
+
+# ------------------------------------------------------------------------------
+
+Usage="$(''${Cmd[cat]} <<EOF
+usage: $Progname OPTION*
+
+Move/copy MP3s named by a .m3u file to an archive area.  MP3s will be created
+from flac as required.
+
+options:
+ -a | --artist  <ARTIST>  set album artist
+ -u | --user    <USER>    add a link to the user's area (may be repeated)
+ -V | --various           set album artist to 'Various Artists'
+ -A | --archive <ARCHIVE> move/copy to this archive.  Defaults to $Archive.
+
+ -v | --verbose
+ --dry-run
+ --help
+ --debug
+EOF
+)"
+
+orig_args=("$@")
+getopt_args=( -o vVa:u:A:
+              --long verbose,dry-run,help,debug,various,user:,artist:,archive: )
+OPTS=$( ''${Cmd[getopt]} "''${getopt_args[@]}" -n "$Progname" -- "$@" )
+
+[ $? -eq 0 ] || die 2 "options parsing failed (--help for help)"
+
+# copy the values of OPTS (getopt quotes them) into the shell's $@
+eval set -- "$OPTS"
+
+artist=""
+users=()
+while true; do
+  case "$1" in
+    -a | --artist   ) artist="$2"              ; shift 2 ;;
+    -u | --user     ) users+=("$2")            ; shift 2 ;;
+    -V | --various  ) artist="Various Artists" ; shift   ;;
+    -A | --archive  ) Archive="$2"             ; shift 2 ;;
+
+    # !!! don't forget to update usage !!!
+    -v | --verbose  ) Verbose=$((Verbose+1))   ; shift   ;;
+    --help          ) usage                              ;;
+    --dry-run       ) DryRun=true              ; shift   ;;
+    --debug         ) Debug=true               ; shift ;;
+    --              ) args+=("''${@:2}")       ; break ;;
+    *               ) args+=("$1")             ; shift ;;
+  esac
+done
+
+debug "CALLED AS: $0 $(showcmd "''${orig_args[@]}")"
+
+for i in "''${args[@]}"; do
+  [[ ''${i:$((''${#i}-4))} == .m3u ]] || dieusage "not an m3u file: '$i'"
+done
+
+case ''${#args[@]} in
+  0 ) usage               ;;
+  * ) main "''${args[@]}" ;;
+esac
+''
+
+# Local Variables:
+# mode: sh
+# End:

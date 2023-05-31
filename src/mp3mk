@@ -1,0 +1,159 @@
+{ pkgs, music-tag, ... }: pkgs.writers.writeBashBin "mp3mk" ''
+
+# -u: Treat unset variables and parameters other than the special parameters "@"
+#     and "*" as an error when performing parameter expansion.  If expansion is
+#     attempted on an unset variable or parameter, the shell prints an error
+#     message, and, if not interactive, exits with a non-zero status.
+
+# -o pipefail: If set, the return value of a pipeline is the value of the last
+#              (rightmost) command to exit with a non-zero status, or zero if
+#              all commands in the pipeline exit successfully.  This option is
+#              disabled by default.
+
+builtin set -u -o pipefail
+
+# nullglob: If set, bash allows patterns which match no files to expand to a
+#           null string, rather than themselves.
+# dotglob:  If set, bash includes filenames beginning with a . in the results of
+#           pathname expansion.
+builtin shopt -s nullglob
+builtin shopt -s dotglob
+
+basename=${pkgs.coreutils}/bin/basename
+false=${pkgs.coreutils}/bin/false
+getopt=${pkgs.utillinux}/bin/getopt
+true=${pkgs.coreutils}/bin/true
+
+progname="$($basename "$0")"
+verbose=$false
+dry_run=$false
+
+dirname=${pkgs.coreutils}/bin/dirname
+flac=${pkgs.flac}/bin/flac
+lame=${pkgs.lame}/bin/lame
+music_tag=${music-tag}/bin/music-tag
+rm=${pkgs.coreutils}/bin/rm
+
+# ------------------------------------------------------------------------------
+
+warn () {
+  echo -e "$1" 1>&2
+}
+
+info () {
+  if $verbose; then
+    echo -e "$1" 1>&2
+  fi
+}
+
+usage () {
+  usage="$(cat <<EOF
+usage: $progname OPTION* MUSIC-FILE
+
+encode a given file to mp3
+
+options:
+ -a | --artwork <FILE>  set mp3 artwork to this file
+                        default: artwork.jpg in file dir
+ -v | --verbose
+ -n | --dry-run
+ -h | --help
+EOF
+)"
+  die 2 "$usage"
+}
+
+die() {
+  warn "$2"
+  exit $1
+}
+
+go() {
+  exit="$1"; shift
+  if $dry_run; then info "(CMD) $*"; else info "CMD> $*"; fi
+  $dry_run || "$@" || die "$exit" "failed: $*"
+}
+
+goeval() {
+  exit="$1"; shift
+  if $dry_run; then
+    info "(CMD) $*"
+  else
+    info "CMD> $*"
+    eval "$*" || die "$exit" "failed: $*"
+  fi
+}
+
+go() {
+  exit="$1"; shift
+  if $dry_run; then info "(CMD) $*"; else info "CMD> $*"; fi
+  $dry_run || "$@" || die "$exit" "failed: $*"
+}
+
+# ------------------------------------------------------------------------------
+
+OPTS=$( $getopt --options vhna:                             \
+                --longoptions verbose,dry-run,help          \
+                --longoptions artwork:                      \
+                --name "$progname" -- "$@"                  )
+
+[ $? -eq 0 ] || die 2 "options parsing failed (--help for help)"
+
+# copy the values of OPTS (getopt quotes them) into the shell's $@
+eval set -- "$OPTS"
+
+artwork=""
+while true; do
+  case "$1" in
+    -v | --verbose  ) verbose=$true ; shift   ;;
+    -h | --help     ) usage                   ;;
+    -n | --dry-run  ) dry_run=$true ; shift   ;;
+    -a | --artwork  ) artwork="$2"  ; shift 2 ;;
+    # !!! don't forget to update usage !!!
+    -- ) shift; break ;;
+    * ) break ;;
+  esac
+done
+
+okay=$false
+target=""
+
+clean() { $okay || $rm -fv "$target"; }
+
+main() {
+  input="$1"
+  inputdir="$($dirname "$input")"
+
+  target="$inputdir"/"$($basename "$input" .flac).mp3"
+  # music-tag breaks on multi-disc files when called as
+  #   music-tag ./x.flac
+  # but is fine as
+  #   music-tag x.flac
+  # that needs fixing, but meantime...
+  if [ x. == "x$($dirname "$target")" ]; then
+    target="$($basename "$target")"
+  fi
+
+  # check this as we'll be auto-deleting it on failure
+  [ -e "$target" ] && die 7 "not overwriting extant '$target'"
+  
+  okay=$false
+  builtin trap clean EXIT
+
+  go 4 "$flac" --decode --stdout "$input"     |  \
+    go 5 "$lame" --preset extreme - "$target" && \
+    go 6 $music_tag "$target" && okay=$true
+}
+
+case $# in
+  0 ) usage ;;
+  * ) for i in "$@"; do main "$i"; done ;;
+esac
+
+# -- that's all, folks! --------------------------------------------------------
+''
+
+# Local Variables:
+# mode: sh
+# sh-basic-offset: 2
+# End:

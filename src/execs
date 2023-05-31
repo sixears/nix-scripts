@@ -1,0 +1,56 @@
+{ pkgs, ... }:
+
+pkgs.writers.writeHaskellBin "execs"
+                             { libraries = [ pkgs.haskellPackages.split
+                                             pkgs.haskellPackages.base-unicode-symbols
+                                           ]; }
+''
+-- execute a list of commands, exiting if any fail
+-- commands are NUL-NUL separated; exec & args are NUL-separated
+{-# OPTIONS_GHC -Wall #-}
+
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE UnicodeSyntax     #-}
+
+-- base --------------------------------
+
+import Control.Monad  ( forM_, return )
+import Data.Function  ( ($) )
+import Data.List      ( filter, length )
+import Data.String    ( String )
+import System.Exit    ( ExitCode( ExitFailure, ExitSuccess ), exitWith )
+import System.IO      ( IO, hGetContents, hPutStrLn, stderr, stdin )
+import Text.Show      ( show )
+
+-- base-unicode-symbols ----------------
+
+import Data.Eq.Unicode        ( (≢) )
+import Data.Function.Unicode  ( (∘) )
+import Data.Monoid.Unicode    ( (⊕) )
+
+-- process -----------------------------
+
+import System.Process  ( rawSystem, showCommandForUser )
+
+-- split -------------------------------
+
+import Data.List.Split  ( splitOn )
+
+--------------------------------------------------------------------------------
+
+warn ∷ String → IO ()
+warn = hPutStrLn stderr
+
+main ∷ IO()
+main = do
+  cmds ← hGetContents stdin
+  forM_ (filter ((0≢) ∘ length) $ splitOn "\0\0" cmds) $ \ cs → do
+    let (exec:args) = splitOn "\0" cs
+    warn $ "CMD> " ⊕ showCommandForUser exec args
+    ex          ← rawSystem exec args
+    case ex of
+      ExitSuccess   → return ()
+      ExitFailure x → do warn $ "command failed with exit code " ⊕ show x
+                         warn $ "  " ⊕ showCommandForUser exec args
+                         exitWith ex
+''

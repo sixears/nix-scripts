@@ -1,0 +1,48 @@
+# -- Battery Performance Gnuplot -----------------------------------------------
+
+set terminal postscript eps enhanced color solid colortext 9;
+set title 'battery performance';
+
+# X-Axis (Date/Time) -----------------------------------------------------------
+
+# x-axis formatting --------------------
+
+set xlabel "date-time"
+set xdata time
+set timefmt "%s"
+axis_gap = 25
+
+# x-axis ranges ------------------------
+
+# ranges 1611933475 - 1611933549
+#        1611956790 - 1611957269
+
+a0 = 1611933475; a0_ = 1611933549
+a1 = 1611956790; a1_ = 1611957269
+f(x) = (x <= a0_) ? x : (x < a1) ? NaN : (x - (a1-a0_) + axis_gap)
+g(x) = (x <= a0_) ? x : (x < a0_+axis_gap) ? NaN : (x + (a1-a0_) - axis_gap)
+set xrange [1611933475:1611957269] noextend
+set nonlinear x via f(x) inverse g(x)
+
+# Creation of the broken axis marks (this should be automated)
+  set arrow 500 from 1611933549, graph 0 to 1611956790, graph 0 nohead lt 1611956790 lw 4 lc bgnd front
+  set arrow 501 from 1611933549, graph 0 length graph  .01 angle 75 nohead lw 2 front
+  set arrow 502 from 1611933549, graph 0 length graph -.01 angle 75 nohead lw 2 front
+  set arrow 503 from 1611956790, graph 0 length graph  .01 angle 75 nohead lw 2 front
+  set arrow 504 from 1611956790, graph 0 length graph -.01 angle 75 nohead lw 2 front
+
+# Y-Axes -----------------------------------------------------------------------
+
+set ylabel "potential difference (V)"; set ytics nomirror;
+set y2label "energy (Wh) / power (W)"; set y2tics nomirror;
+
+# Output -----------------------------------------------------------------------
+
+set output 'multiple_plots.eps';
+
+plot 'data1' using 1:3 w l  title 'energy (Wh)'  axis x1y2,\
+     ''           using 1:4 w l title 'p.d. (V)'     axis x1y1,\
+     ''           using 1:6 w l title 'min p.d. (V)' axis x1y1,\
+     ''           using 1:5 w l title 'power(W)' axis x1y2
+
+# -- that's all, folks! --------------------------------------------------------
