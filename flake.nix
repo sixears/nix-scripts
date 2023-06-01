@@ -4,7 +4,8 @@
   inputs = {
     nixpkgs.url     = github:nixos/nixpkgs/be44bf67; # nixos-22.05 2022-10-15
     flake-utils.url = github:numtide/flake-utils/c0e246b9;
-    hpkgs1.url      = github:sixears/hpkgs1/r0.0.13.0;
+    hpkgs1.url      = github:sixears/hpkgs1/r0.0.15.0;
+#    hpkgs1.url      = path:/home/martyn/src/hpkgs1/;
   };
 
   outputs = { self, nixpkgs, flake-utils, hpkgs1 }:
@@ -17,7 +18,9 @@
         mkHBin = hlib.mkHBin;
 
         backup = mkHBin "backup" ./src/backup.hs {
-          libs = p: with p; [
+          ## put this (pkgs.haskellPackages) back into hpkgs1
+          libs = p: with p; with pkgs.haskellPackages;
+            [
             logging-effect
 
             log-plus-0-0 mockio-log-0-1 parsec-plus-1-1 stdmain-1-5
@@ -135,8 +138,8 @@
 
             mkv-chapter  = (mkHBin "mkv-chapter" ./src/mkv-chapter.hs {
               libs = p: with p; [
-                base-unicode-symbols data-textual lens mtl optparse-applicative
-                path text
+                base-unicode-symbols data-textual lens mtl
+                optparse-applicative path text
 
                 monaderror-io more-unicode proclib stdmain
               ];

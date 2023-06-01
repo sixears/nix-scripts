@@ -463,22 +463,22 @@
         "stdmain-src-1-5-13-0": "stdmain-src-1-5-13-0",
         "tasty-plus-src-1-5-2-24": "tasty-plus-src-1-5-2-24",
         "textual-plus-src-1-0-2-28": "textual-plus-src-1-0-2-28",
-        "textual-plus-src-1-1-0-0": "textual-plus-src-1-1-0-0",
+        "textual-plus-src-1-1-2-0": "textual-plus-src-1-1-2-0",
         "tfmt-src-0-2-7-25": "tfmt-src-0-2-7-25",
         "trifecta-plus-src-0-0-1-0": "trifecta-plus-src-0-0-1-0",
         "yaml-plus-src-1-0-1-1": "yaml-plus-src-1-0-1-1"
       },
       "locked": {
-        "lastModified": 1681458712,
-        "narHash": "sha256-MB93oSpXcEHFv/ZcMopr0wQ9C83/S7zWOoPRZ0Lbhjc=",
+        "lastModified": 1685599057,
+        "narHash": "sha256-dO5wGUElksM43jlaKVsK4txo+kMt+RmxD44YJjrkjKA=",
         "owner": "sixears",
         "repo": "hpkgs1",
-        "rev": "aef25fedd5705eebe2b2328f29d35bc182d4e5ee",
+        "rev": "f4eab717d5b40758b7629a6a2f647ddc03fed1bd",
         "type": "github"
       },
       "original": {
         "owner": "sixears",
-        "ref": "r0.0.13.0",
+        "ref": "r0.0.15.0",
         "repo": "hpkgs1",
         "type": "github"
       }
@@ -1049,19 +1049,19 @@
         "type": "github"
       }
     },
-    "textual-plus-src-1-1-0-0": {
+    "textual-plus-src-1-1-2-0": {
       "flake": false,
       "locked": {
-        "lastModified": 1681455150,
-        "narHash": "sha256-BnM31oe3iUkZkYYAKx8FX6Z+OOHoi2dXdFXFu6n6isY=",
+        "lastModified": 1685598792,
+        "narHash": "sha256-mC+GMHrKUjF8HxyJnJaPrAYNtkgm3vPrUWL8BmetdNg=",
         "owner": "sixears",
         "repo": "textual-plus",
-        "rev": "18f29707730aac841c683ff00166a309f1e3618a",
+        "rev": "c41db4b69a7ceab21c9201066a4cb3a8a44ef6de",
         "type": "github"
       },
       "original": {
         "owner": "sixears",
-        "ref": "r1.1.0.0",
+        "ref": "r1.1.2.0",
         "repo": "textual-plus",
         "type": "github"
       }
