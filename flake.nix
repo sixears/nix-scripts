@@ -6,12 +6,18 @@
     flake-utils.url = github:numtide/flake-utils/c0e246b9;
     hpkgs1.url      = github:sixears/hpkgs1/r0.0.15.0;
 #    hpkgs1.url      = path:/home/martyn/src/hpkgs1/;
+##    bashHeader      = {
+##      url    = github:sixears/bash-header/5206b087;
+##      inputs = { nixpkgs.follows = "nixpkgs"; };
+##    };
+    bashHeader.url      = path:/home/martyn/src/bash-header/;
   };
 
-  outputs = { self, nixpkgs, flake-utils, hpkgs1 }:
+  outputs = { self, nixpkgs, flake-utils, hpkgs1, bashHeader }:
     flake-utils.lib.eachSystem [ "x86_64-linux" ] (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        bash-header = bashHeader.packages.${system}.bash-header;
 
         hpkgs  = hpkgs1.packages.${system};
         hlib   = hpkgs1.lib.${system};
@@ -28,6 +34,7 @@
           ];
         };
 
+#        header       = import ./src/header.nix    { inherit pkgs; };
         header       = import ./src/header.nix    { inherit pkgs; };
 
 #        replace      = import ./src/replace.nix   { inherit pkgs; };
@@ -182,6 +189,7 @@
             # -- haskell utilities -----
 
             bs2hs = bs2hs.pkg;
+            hcomm = import ./src/hcomm.nix { inherit pkgs bash-header; };
 
             # -- kubernetes utilities --
             x509 = import ./src/x509.nix { inherit pkgs; };
