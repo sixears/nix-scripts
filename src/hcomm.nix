@@ -7,6 +7,9 @@ Cmd[git]=${pkgs.git}/bin/git
 shopt -s extglob  # for ls glob +(...); also rm !(...).nix
 shopt -u nullglob # so ls on no files gives no answer
 
+# git implicitly relies on ssh
+PATH=${pkgs.openssh}/bin
+
 # -- main ----------------------------------------------------------------------
 
 main () {
@@ -22,7 +25,7 @@ main () {
   capture package gocmdnodryrun 14 basename "$package"
 
   local pcount
-  capture pcount gocmdnodryrun 15 ls -1                                        \
+  capture pcount gocmdnodryrunexitzero ls -1                                        \
           ~/src/dists/"$package"-+([0-9])\.+([0-9])\.+([0-9])\.+([0-9]).tar.gz \
           2>/dev/null
   capture pcount gocmdnodryrun 16 wc -l <<<"$pcount"
@@ -41,11 +44,13 @@ main () {
 
   local status
   capture status gocmdnodryrun 21 git status --short
-  gocmdnoexitnodryrun grep --no-messages --silent '^??' <<< "$status"
+  # we can't even use noexitnodryrun here; because it still returns the exit
+  # code even though it doesn't fail on it.
+  capture status gocmd01nodryrun 28 grep --no-messages '^??' <<< "$status"
   local unclean
   capture_array unclean gocmdnodryrun 22 cut -c 4- <<<"$status"
-  if [[ 0 -eq $rv ]]; then
-    die_unless_dryrun 22 "unclean files exist (''${unclean[*]})"
+  if [[ 0 -ne ''${#unclean[@]} ]]; then
+    die_unless_dryrun 27 "!! unclean files exist (''${unclean[*]})"
   fi
 
   warnf "committing r$version..."; gocmd 23 git commit -m "r$version" -a; echo

@@ -6,11 +6,11 @@
     flake-utils.url = github:numtide/flake-utils/c0e246b9;
     hpkgs1.url      = github:sixears/hpkgs1/r0.0.15.0;
 #    hpkgs1.url      = path:/home/martyn/src/hpkgs1/;
-##    bashHeader      = {
-##      url    = github:sixears/bash-header/5206b087;
-##      inputs = { nixpkgs.follows = "nixpkgs"; };
-##    };
-    bashHeader.url      = path:/home/martyn/src/bash-header/;
+    bashHeader      = {
+      url    = github:sixears/bash-header/r0.0.3.0;
+      inputs = { nixpkgs.follows = "nixpkgs"; };
+    };
+#    bashHeader.url      = path:/home/martyn/src/bash-header/;
   };
 
   outputs = { self, nixpkgs, flake-utils, hpkgs1, bashHeader }:
