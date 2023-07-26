@@ -1,14 +1,15 @@
-{-# LANGUAGE ConstraintKinds   #-}
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RankNTypes        #-}
-{-# LANGUAGE QuasiQuotes       #-}
-{-# LANGUAGE TupleSections     #-}
-{-# LANGUAGE TypeApplications  #-}
-{-# LANGUAGE UnicodeSyntax     #-}
-{-# LANGUAGE ViewPatterns      #-}
+{-# LANGUAGE ConstraintKinds     #-}
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE NoImplicitPrelude   #-}
+{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE RankNTypes          #-}
+{-# LANGUAGE QuasiQuotes         #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections       #-}
+{-# LANGUAGE TypeApplications    #-}
+{-# LANGUAGE UnicodeSyntax       #-}
+{-# LANGUAGE ViewPatterns        #-}
 
 -- XXX use of --verbose=info:{cshead^ioclasses=iocmdw,iocmdr}:/tmp/log
 --     alias for ^^^ that just shows commands (no datestamp, etc.); optionally
@@ -368,7 +369,7 @@ doMain opts = flip runReaderT (opts ⊣ dryRunLevel) $ do
 ----------------------------------------
 
 main ∷ MonadIO μ ⇒ μ ()
-main = let desc = "back up filesystems to pre-partitioned external disk"
+main = let desc ∷ 𝕋 = "back up filesystems to pre-partitioned external disk"
         in getArgs ≫ stdMain_ @ScriptError two desc (pure ()) doMain
 
 -- that's all, folks! ----------------------------------------------------------

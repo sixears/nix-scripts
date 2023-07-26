@@ -339,7 +339,7 @@ myMain do_mock opts = do
 
 main ∷ IO ()
 main = do
-  let progDesc = "queue executions"
+  let progDesc ∷ 𝕋 = "queue executions"
   getArgs ≫ stdMain progDesc parseOptions (myMain @UsageParseFPProcIOError)
 
 -- that's all, folks! ----------------------------------------------------------

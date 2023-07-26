@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url     = github:nixos/nixpkgs/be44bf67; # nixos-22.05 2022-10-15
     flake-utils.url = github:numtide/flake-utils/c0e246b9;
-    hpkgs1.url      = github:sixears/hpkgs1/r0.0.15.0;
+    hpkgs1.url      = github:sixears/hpkgs1/r0.0.18.0;
 #    hpkgs1.url      = path:/home/martyn/src/hpkgs1/;
     bashHeader      = {
       url    = github:sixears/bash-header/r0.0.3.0;
@@ -29,7 +29,7 @@
             [
             logging-effect
 
-            log-plus-0-0 mockio-log-0-1 parsec-plus-1-1 stdmain-1-5
+            log-plus-0-0 mockio-log-0-1 parsec-plus-1-1 stdmain
             mockio-cmds-inetutils mockio-cmds-rsync mockio-cmds-util-linux
           ];
         };
@@ -83,7 +83,7 @@
 
         # -- mkv/video utilities -------
 
-        midentify = import ./src/midentify.nix { inherit pkgs; };
+        # midentify = import ./src/midentify.nix { inherit pkgs; };
 
         # -- general utilities ---------
 
@@ -91,7 +91,7 @@
           libs = p: with p; [
             filelock logging-effect timers
 
-            log-plus-0-0 mockio-log-0-1 parsec-plus-1-1 stdmain-1-5
+            log-plus-0-0 mockio-log-0-1 parsec-plus-1-1 stdmain
             tasty-plus-1-5
           ];
         };
@@ -164,8 +164,23 @@
                                      { inherit pkgs header; };
 
             vid-join  = import ./src/vid-join.nix  { inherit pkgs; };
-            inherit midentify;
-            mid  = import ./src/mid.nix  { inherit pkgs midentify header; };
+            # inherit midentify;
+            # mid  = import ./src/mid.nix  { inherit pkgs midentify header; };
+            mid = (mkHBin "mid" ./src/mid.hs {
+              libs = p: with p; with hlib.hpkgs; [
+                base containers data-textual lens logging-effect mtl
+                optparse-applicative text
+
+                # we're not so much pinned to version 1, as there is a
+                # duration-0.2.0.0 from hackage that we mean to avoid
+                base1 duration-1-0 env-plus fpath log-plus mockio-log
+                mockio-plus monadio-plus optparse-plus stdmain textual-plus
+              ];
+
+              replace = p: with p; {
+                __mplayer__ = "${pkgs.mplayer}";
+              };
+            }).pkg;
 
             # -- general utilities -----
 

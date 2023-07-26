@@ -1,13 +1,17 @@
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE NoImplicitPrelude   #-}
+{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications    #-}
 {-# LANGUAGE UnicodeSyntax       #-}
 
 import Base1
 
+import Prelude  ( Float, fromRational )
+
 -- base --------------------------------
 
-import Data.Char      ( isDigit )
 import Data.Function  ( flip )
 import Data.List      ( concatMap, sortOn )
 import Data.Maybe     ( catMaybes )
@@ -23,7 +27,7 @@ import qualified Data.Textual
 
 -- duration ----------------------------
 
-import Duration  ( Duration )
+import Duration  ( Duration, asSeconds )
 
 -- env-plus ----------------------------
 
@@ -38,7 +42,7 @@ import FPath.Parseable         ( readM )
 
 -- fstat -------------------------------
 
-import FStat  ( FStat, size )
+import qualified  FStat
 
 -- lens --------------------------------
 
@@ -65,11 +69,6 @@ import MockIO.Process  ( ꙩ )
 -- mtl ---------------------------------
 
 import Control.Monad.Reader  ( runReaderT )
-import Control.Monad.Trans   ( lift )
-
--- monaderror-io -----------------------
-
-import MonadError.IO.Error  ( throwUserError )
 
 -- monadio-plus ------------------------
 
@@ -81,13 +80,12 @@ import MonadIO.FPath                  ( pResolve )
 
 -- optparse-applicative ----------------
 
-import Options.Applicative.Builder  ( argument, flag, help, long, metavar, option
-                                    , short, switch, strArgument, value )
+import Options.Applicative.Builder  ( argument, flag, help, long, metavar )
 import Options.Applicative.Types    ( Parser )
 
 -- optparse-plus -----------------------
 
-import OptParsePlus  ( parsecReader, parseNE, textualOption )
+import OptParsePlus  ( parseNE )
 
 -- stdmain -----------------------------
 
@@ -96,7 +94,7 @@ import StdMain.UsageError  ( UsageFPProcIOError )
 
 -- text --------------------------------
 
-import Data.Text  ( breakOn, drop, isPrefixOf, pack, takeWhile, unpack )
+import Data.Text  ( breakOn, drop, intercalate, isPrefixOf, pack, unpack )
 
 -- textual-plus ------------------------
 
@@ -104,7 +102,8 @@ import TextualPlus  ( TextualPlus ( textual' ), parseTextual )
 
 --------------------------------------------------------------------------------
 
-data Mode = ModeRaw | ModeParsed
+data Presentation = Human | Tabs
+data Mode = ModeRaw | ModeParsed Presentation
 
 data Options = Options { _mode   ∷ Mode
                        , _inputs ∷ NonEmpty File
@@ -124,20 +123,79 @@ mode = lens _mode (\ o is → o { _mode = is })
 
 parseOptions ∷ Parser Options
 parseOptions =
-  Options ⊳ flag ModeParsed ModeRaw (long "raw" ⊕ help "output all ID_ tags")
+  Options ⊳ ( flag (ModeParsed Human) ModeRaw
+                   (long "raw" ⊕ help "output all ID_ tags")
+            ∤ flag (ModeParsed Human) (ModeParsed Tabs)
+                   (long "tabs" ⊕ help "output tab-delimited"))
           ⊵ parseNE (argument readM (metavar "FILENAME"))
 
 ------------------------------------------------------------
 
--- FIXME
-
-mplayer = [absfile|/nix/store/y2j061fqy2zvn3na1rvv5vy31a7v1z27-mplayer-unstable-2022-02-03/bin/mplayer|]
+mplayer ∷ AbsFile
+mplayer = [absfile|__mplayer__/bin/mplayer|]
 
 instance TextualPlus Duration where
   textual' = Data.Textual.textual
 
 (⫤) ∷ At δ ⇒ δ → Index δ → 𝕄 (IxValue δ)
 x ⫤ y = x ⊣ at y
+
+data FileData = FileData { _len    ∷ Duration
+                         , _width  ∷ ℕ
+                         , _height ∷ ℕ
+                         , _size   ∷ Word64
+                         }
+
+fd_len ∷ Lens' FileData Duration
+fd_len = lens _len (\ o l → o { _len = l })
+
+fd_size ∷ Lens' FileData Word64
+fd_size = lens _size (\ o s → o { _size = s })
+
+fd_width ∷ Lens' FileData ℕ
+fd_width = lens _width (\ o w → o { _width = w })
+
+fd_height ∷ Lens' FileData ℕ
+fd_height = lens _height (\ o h → o { _height = h })
+
+----------------------------------------
+
+parseMIdentify ∷ 𝕄 FStat.FStat → Map.Map 𝕋 𝕋 → 𝔼 𝕋 FileData
+parseMIdentify st identifiers = do
+  let readEitherT ∷ Read α ⇒ 𝕊 → 𝕋 → 𝔼 𝕋 α
+      readEitherT typ s =
+        case readEither (unpack s) of
+          𝕽 x → 𝕽 $ x
+          𝕷 e → 𝕷 $ ([fmt|failed to parse %t as %s: %s|] s typ e)
+      get ∷ 𝕋 → (𝕋 → 𝔼 𝕋 α) → 𝔼 𝕋 α
+      get name f = maybe (𝕷 $ [fmt|no %t found|] name)
+                         f (identifiers ⫤ name)
+
+  l ← get "ID_LENGTH" (parseTextual ∘ (⊕"s"))
+  w ← get "ID_VIDEO_WIDTH" (readEitherT "ℕ")
+  h ← get "ID_VIDEO_HEIGHT" (readEitherT "ℕ")
+  z ← maybe (𝕷 "empty stat") (𝕽 ∘ FStat.size) st
+  return $ FileData l w h z
+
+----------------------------------------
+
+format ∷ Presentation → AbsFile → FileData → 𝕋
+format presentation file_name file_data =
+  let len    = file_data ⊣ fd_len
+      width  = file_data ⊣ fd_width
+      height = file_data ⊣ fd_height
+      size   = file_data ⊣ fd_size
+  in  case presentation of
+        Human → [fmt|%T\t%,10d\t%10t\t%8T|]
+                file_name size ([fmt|%dx%d|] width height) len
+        Tabs  → intercalate "\t" [ toText file_name
+                                 , toText size
+                                 , pack $ show width
+                                 , pack $ show height
+                                 , toText (fromRational @Float $ len ⊣ asSeconds)
+                                 ]
+
+----------------------------------------
 
 myMain ∷ ∀ ε .
          (HasCallStack, AsIOError ε, AsFPathError ε, AsCreateProcError ε,
@@ -161,33 +219,15 @@ myMain opts = flip runReaderT NoMock $ do
 
     let m_identifiers = Map.fromList $ concatMap parseLine stdout
 
-    let printParsed ∷ 𝕄 FStat → Map.Map 𝕋 𝕋 → 𝔼 𝕋 (Duration,ℕ,ℕ,Word64)
-        printParsed st identifiers = do
-          let readEitherT ∷ Read α ⇒ 𝕊 → 𝕋 → 𝔼 𝕋 α
-              readEitherT typ s =
-                case readEither (unpack s) of
-                  𝕽 x → 𝕽 $ x
-                  𝕷 e → 𝕷 $ ([fmt|failed to parse %t as %s: %s|] s typ e)
-              get ∷ 𝕋 → (𝕋 → 𝔼 𝕋 α) → 𝔼 𝕋 α
-              get name f = maybe (𝕷 $ [fmt|no %t found|] name)
-                               f (identifiers ⫤ name)
-
---          len ← maybe (𝕷 "no length found") (parseTextual ∘ (⊕"s")) ((takeWhile isDigit) ⊳ ("ID_LENGTH" `Map.lookup` identifiers))
-          len ← get "ID_LENGTH" (parseTextual ∘ (⊕"s"))
-          width ← get "ID_VIDEO_WIDTH" (readEitherT "ℕ")
-          height ← get "ID_VIDEO_HEIGHT" (readEitherT "ℕ")
-          sz ← maybe (𝕷 "empty stat") (𝕽 ∘ size) st
-          return (len,width,height,sz)
-
     case opts ⊣ mode of
-      ModeRaw → do forM_ (sortOn fst $ Map.toList m_identifiers) printRaw ⪼ return 𝕹
-      ModeParsed → do
+      ModeRaw → do forM_ (sortOn fst $ Map.toList m_identifiers) printRaw
+                   return 𝕹
+      ModeParsed presentation → do
         st ← stat Informational 𝕹 input NoMock
-        case printParsed st m_identifiers of
-          𝕽 (len,width,height,sz) → do say ([fmtT|%T\t%,10d\t%10t\t%8T|] input sz ([fmt|%dx%d|] width height)  len) ⪼ return 𝕹
-                                  -- say $ [fmtT|%T\t%,10d\t%8T|] input sz len
-                                  -- return 𝕹
-          𝕷 e       → return $ 𝕵 ([fmtT|%T: %t|] input e)
+        case parseMIdentify st m_identifiers of
+          𝕽 file_data → do say $ format presentation input file_data
+                           return 𝕹
+          𝕷 e         → return $ 𝕵 ([fmtT|%T: %t|] input e)
 
   case catMaybes $ toList xs of
     [] → return 0
@@ -195,6 +235,6 @@ myMain opts = flip runReaderT NoMock $ do
 
 main ∷ IO ()
 main = do
-  let progDesc ∷ 𝕋 = "FIX ME"
+  let progDesc ∷ 𝕋 = "write essential stats for one or more video files"
       my_main = myMain @UsageFPProcIOError
   getArgs ≫ (\ args → stdMainNoDR progDesc parseOptions my_main args)

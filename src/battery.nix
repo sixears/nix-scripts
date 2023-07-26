@@ -85,7 +85,7 @@ gscript() {
   local file=/tmp/battery.tdv
 # gnuplotting.org
   local result="$(''${Cmd[perl]} -plE 's{\*$}{\\}' <<'EOF'
-     set terminal postscript eps enhanced color solid colortext 9; 
+     set terminal postscript eps enhanced color solid colortext 9;
      set output 'multiple_plots.eps';
      set title 'battery performance';
 
@@ -168,10 +168,19 @@ main() {
     debug "$k: ''${uevent[$k]}"
   done
 
-  local energy_design="''${uevent[ENERGY_FULL_DESIGN]}"
-  local energy_full="''${uevent[ENERGY_FULL]}"
-  local energy_now="''${uevent[ENERGY_NOW]}"
-  
+  local energy_design energy_full energy_now
+  if [[ -v uevent[ENERGY_FULL_DESIGN] ]]; then
+    energy_design="''${uevent[ENERGY_FULL_DESIGN]}"
+    energy_full="''${uevent[ENERGY_FULL]}"
+    energy_now="''${uevent[ENERGY_NOW]}"
+  elif  [[ -v uevent[CHARGE_FULL_DESIGN] ]]; then
+    energy_design="''${uevent[CHARGE_FULL_DESIGN]}"
+    energy_full="''${uevent[CHARGE_FULL]}"
+    energy_now="''${uevent[CHARGE_NOW]}"
+  else
+    die 5 "No charge stats found in '$BATT1UEVENT' (''${!uevent[*]})"
+  fi
+
   local energy_design_wh energy_full_wh energy_now_wh
   div_1m_3sf "$energy_design" energy_design_wh
   div_1m_3sf "$energy_full"   energy_full_wh
@@ -309,7 +318,7 @@ case ''${#args[@]} in
                  dieusage "unknown mode ''\'''${args[0]}'"
                fi
                ;;
-                 
+
       esac ;;
   2 ) case "''${args[0]}" in
         watch ) if [[ ''${args[1]} =~ ^[0-9]+$ ]] \

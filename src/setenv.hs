@@ -640,7 +640,7 @@ myMain opts =
 
 main ∷ IO ()
 main = do
-  let progDesc = "run with a fixed environment as read from a file"
+  let progDesc ∷ 𝕋 = "run with a fixed environment as read from a file"
   getArgs ≫ stdMainNoDR progDesc parseOptions (myMain @UsageParseFPProcIOError)
 
 -- tests -----------------------------------------------------------------------
