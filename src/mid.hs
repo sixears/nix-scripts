@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wall #-}
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE NoImplicitPrelude   #-}
 {-# LANGUAGE OverloadedStrings   #-}
@@ -44,10 +45,6 @@ import FPath.Parseable         ( readM )
 
 import qualified  FStat
 
--- lens --------------------------------
-
-import Control.Lens.At  ( At, Index, IxValue, at )
-
 -- logging-effect ----------------------
 
 import Control.Monad.Log  ( LoggingT, Severity( Informational ) )
@@ -66,10 +63,6 @@ import MockIO.DoMock  ( DoMock( NoMock ) )
 import MockIO.FStat    ( stat )
 import MockIO.Process  ( ꙩ )
 
--- mtl ---------------------------------
-
-import Control.Monad.Reader  ( runReaderT )
-
 -- monadio-plus ------------------------
 
 import MonadIO                        ( say, warn )
@@ -77,6 +70,14 @@ import MonadIO.Base                   ( getArgs )
 import MonadIO.Error.CreateProcError  ( AsCreateProcError )
 import MonadIO.Error.ProcExitError    ( AsProcExitError )
 import MonadIO.FPath                  ( pResolve )
+
+-- more-unicode ------------------------
+
+import Data.MoreUnicode.Lens  ( (⫤) )
+
+-- mtl ---------------------------------
+
+import Control.Monad.Reader  ( runReaderT )
 
 -- optparse-applicative ----------------
 
@@ -137,8 +138,8 @@ mplayer = [absfile|__mplayer__/bin/mplayer|]
 instance TextualPlus Duration where
   textual' = Data.Textual.textual
 
-(⫤) ∷ At δ ⇒ δ → Index δ → 𝕄 (IxValue δ)
-x ⫤ y = x ⊣ at y
+-- (⫤) ∷ At δ ⇒ δ → Index δ → 𝕄 (IxValue δ)
+-- x ⫤ y = x ⊣ at y
 
 data FileData = FileData { _len    ∷ Duration
                          , _width  ∷ ℕ

@@ -81,10 +81,6 @@
           };
         };
 
-        # -- mkv/video utilities -------
-
-        # midentify = import ./src/midentify.nix { inherit pkgs; };
-
         # -- general utilities ---------
 
         queue = mkHBin "queue" ./src/queue.hs {
@@ -165,16 +161,16 @@
 
             vid-join  = import ./src/vid-join.nix  { inherit pkgs; };
             # inherit midentify;
-            # mid  = import ./src/mid.nix  { inherit pkgs midentify header; };
             mid = (mkHBin "mid" ./src/mid.hs {
               libs = p: with p; with hlib.hpkgs; [
-                base containers data-textual lens logging-effect mtl
+                base containers data-textual logging-effect mtl
                 optparse-applicative text
 
                 # we're not so much pinned to version 1, as there is a
                 # duration-0.2.0.0 from hackage that we mean to avoid
                 base1 duration-1-0 env-plus fpath log-plus mockio-log
-                mockio-plus monadio-plus optparse-plus stdmain textual-plus
+                mockio-plus monadio-plus more-unicode optparse-plus stdmain
+                textual-plus
               ];
 
               replace = p: with p; {
