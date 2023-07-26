@@ -58,10 +58,11 @@ main () {
   warnf "pushing tags..."; gocmd 25 git push --tags; echo
 
   local dists=~/src/dists
-  cd ~/src/dists
+  cd $dists
   for i in $dists/$package-!($version).tar.gz; do
     warnf "Moving $i to the Attic..."; gocmd 26 mv "$i" $dists/Attic/; echo
   done
+  cp $targz $dists/
 
   echo "now add it to hpkgs using ~/bin/cabal2callPkg to generate the stanzas"
 }

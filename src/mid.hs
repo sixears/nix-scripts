@@ -135,12 +135,6 @@ parseOptions =
 mplayer ∷ AbsFile
 mplayer = [absfile|__mplayer__/bin/mplayer|]
 
-instance TextualPlus Duration where
-  textual' = Data.Textual.textual
-
--- (⫤) ∷ At δ ⇒ δ → Index δ → 𝕄 (IxValue δ)
--- x ⫤ y = x ⊣ at y
-
 data FileData = FileData { _len    ∷ Duration
                          , _width  ∷ ℕ
                          , _height ∷ ℕ
