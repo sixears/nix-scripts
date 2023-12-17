@@ -4,8 +4,8 @@
   inputs = {
     nixpkgs.url     = github:nixos/nixpkgs/be44bf67; # nixos-22.05 2022-10-15
     flake-utils.url = github:numtide/flake-utils/c0e246b9;
-    hpkgs1.url      = github:sixears/hpkgs1/r0.0.19.0;
-#    hpkgs1.url      = path:/home/martyn/src/hpkgs1/;
+#    hpkgs1.url      = github:sixears/hpkgs1/r0.0.19.0;
+    hpkgs1.url      = path:/home/martyn/src/hpkgs1/;
     bashHeader      = {
       url    = github:sixears/bash-header/r0.0.3.0;
       inputs = { nixpkgs.follows = "nixpkgs"; };

@@ -59,10 +59,13 @@ main () {
 
   local dists=~/src/dists
   cd $dists
+  shopt -s nullglob # so an empty package list means nothing doing, rather
+                    # than a literal !($version)
   for i in $dists/$package-!($version).tar.gz; do
     warnf "Moving $i to the Attic..."; gocmd 26 mv "$i" $dists/Attic/; echo
   done
-  cp $targz $dists/
+  shopt -u nullglob
+  gocmd 29 cp $targz $dists/
 
   echo "now add it to hpkgs using ~/bin/cabal2callPkg to generate the stanzas"
 }
