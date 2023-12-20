@@ -2,15 +2,15 @@
   description = "home-made scripts";
 
   inputs = {
-    nixpkgs.url     = github:nixos/nixpkgs/be44bf67; # nixos-22.05 2022-10-15
+    nixpkgs.url     = github:NixOS/nixpkgs/354184a; # master 2023-12-13
     flake-utils.url = github:numtide/flake-utils/c0e246b9;
-#    hpkgs1.url      = github:sixears/hpkgs1/r0.0.19.0;
-    hpkgs1.url      = path:/home/martyn/src/hpkgs1/;
+    hpkgs1.url      = github:sixears/hpkgs1/r0.0.24.0;
+#    hpkgs1.url      = path:/home/martyn/src/hpkgs1/;
     bashHeader      = {
       url    = github:sixears/bash-header/r0.0.3.0;
+#      url      = path:/home/martyn/src/bash-header/;
       inputs = { nixpkgs.follows = "nixpkgs"; };
     };
-#    bashHeader.url      = path:/home/martyn/src/bash-header/;
   };
 
   outputs = { self, nixpkgs, flake-utils, hpkgs1, bashHeader }:
