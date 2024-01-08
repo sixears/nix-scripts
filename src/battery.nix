@@ -215,7 +215,7 @@ main() {
   local v_health="''${v_now} (design min: ''${voltage_design_min}V)"
 
   local disch_m disch_h disch_time
-  if [[ 0 -eq ''${uevent[POWER_NOW]} ]]; then
+  if [[ 0 -eq ''${uevent[POWER_NOW]:-0} ]]; then
     disch_m=0
     disch_h=0
     disch_time=0
@@ -225,7 +225,7 @@ main() {
     disch_time="''${disch_m}mins ($disch_h)"
   fi
 
-  local power_w; div_1m_3sf ''${uevent[POWER_NOW]} power_w;
+  local power_w; div_1m_3sf ''${uevent[POWER_NOW]:-0} power_w;
   local power_w_w="''${power_w}W"
 
   if $Brief; then

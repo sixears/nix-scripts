@@ -108,8 +108,9 @@
 
             # -- environment/setup -----
 
-            init = import ./src/init.nix
-                          { inherit pkgs gpg-agent-restart ssh-init; };
+            init      = import ./src/init.nix
+                               { inherit pkgs gpg-agent-restart ssh-init; };
+            homelinks = import ./src/homelinks.nix { inherit pkgs; };
 
             # -- flake utilities -------
 
