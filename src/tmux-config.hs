@@ -311,7 +311,9 @@ main = do
 
 tests ∷ TestTree
 tests =
-  let status_left_style = ExpandTwice WithoutStrftime (bareOption StatusLeftStyle)
+  let status_left_style ∷ FormatSpecifier StyleOption
+      status_left_style = ExpandTwice WithoutStrftime (bareOption StatusLeftStyle)
+      status_left       ∷ FormatSpecifier FormatOption
       status_left       = bareOption StatusLeft
       ts_ :: [(𝕋,Format SavedDefault)]
       ts_ =
@@ -319,8 +321,6 @@ tests =
             left_style_status = emptyStyle & align        ⊩ AlignLeft
                                            & range        ⊩ RangeLeft
                                            & stylePayload ⊩ status_left_style
-            left_status :: FormatSpecifier FormatOption
-            left_status = status_left
         in  [ ( "#[align=left range=left #{E:status-left-style}]"
               , toFormat left_style_status
               )
@@ -361,7 +361,7 @@ tests =
             , ( ю [ "#[push-default]"
                   , "#{T;=/#{status-left-length}:status-left}"
                   , "#[pop-default]" ]
-              , saveDefault $ toFormat left_status
+              , saveDefault $ toFormat (ExpandTwice WithStrftime $ MaxLen (OptLen StatusLeftLength) status_left)
             )
             ]
       do_test :: (𝕋, Format SavedDefault) → TestTree
