@@ -313,6 +313,12 @@ tests ∷ TestTree
 tests =
   let _E                ∷ FormatSpecifier α → FormatSpecifier α
       _E                = ExpandTwice WithoutStrftime
+      _T                ∷ FormatSpecifier α → FormatSpecifier α
+      _T                = ExpandTwice WithStrftime
+      len3              ∷ FormatSpecifier α → FormatSpecifier α
+      len3              = MaxLen $ FixedLen 3
+      len_left_length   ∷ FormatSpecifier α → FormatSpecifier α
+      len_left_length   = MaxLen $ OptLen StatusLeftLength
       status_left_style ∷ FormatSpecifier StyleOption
       status_left_style = _E $ bareOption StatusLeftStyle
       status_left       ∷ FormatSpecifier FormatOption
@@ -334,15 +340,16 @@ tests =
               )
             , ( "#{window_name}", toFormat WindowName )
             , ( "#{@foobie}", toFormat $ user_foobie )
-            , ( "#{=3:window_name}", toFormat $ MaxLen (FixedLen 3) bare_wname )
+            , ( "#{=3:window_name}", toFormat $ len3 bare_wname )
             , ( "#{=/#{status-left-length}:window_name}",
-                toFormat $ MaxLen (OptLen StatusLeftLength) bare_wname )
+                toFormat $ len_left_length bare_wname )
             , ( "#{T:@foobie}",
                 toFormat $ ExpandTwice WithStrftime
                          $ bare_foobie )
-            , ( "#{E;=3:@foobie}", -- "#{=3:#{E:@foobie}}" would also work, less compact
+            , ( "#{E;=3:@foobie}",
+                -- "#{=3:#{E:@foobie}}" would also work, but is less compact
                 toFormat $
-                  MaxLen (FixedLen 3) (_E bare_foobie) )
+                  len3 (_E bare_foobie) )
 
             {- The ordering of the T and the =1 doesn't matter; the T always effects:
                > $ tmux set-option @foobie %Y-%M-%d
@@ -352,18 +359,18 @@ tests =
                > 2
             -}
             , ( "#{T;=3:@foobie}",
-                toFormat $ ExpandTwice WithStrftime $ MaxLen (FixedLen 3) bare_foobie)
+                toFormat $ _T $ len3 bare_foobie)
 
             , ( "#{T;=3:@foobie}",
-                toFormat $ MaxLen (FixedLen 3) $ ExpandTwice WithStrftime bare_foobie)
+                toFormat $ len3 $ _T bare_foobie)
             , ( "#{=/#{status-left-length}:window_name}",
-                toFormat $ MaxLen (OptLen StatusLeftLength) bare_wname )
+                toFormat $ len_left_length bare_wname )
             , ( "#{E;=3:window_name}",
-                toFormat $ _E $ MaxLen (FixedLen 3) bare_wname )
+                toFormat $ _E $ len3 bare_wname )
             , ( ю [ "#[push-default]"
                   , "#{T;=/#{status-left-length}:status-left}"
                   , "#[pop-default]" ]
-              , saveDefault $ toFormat (ExpandTwice WithStrftime $ MaxLen (OptLen StatusLeftLength) status_left)
+              , saveDefault $ toFormat (_T $ len_left_length status_left)
             )
             ]
       do_test :: (𝕋, Format SavedDefault) → TestTree
