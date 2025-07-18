@@ -311,10 +311,18 @@ main = do
 
 tests ∷ TestTree
 tests =
-  let status_left_style ∷ FormatSpecifier StyleOption
-      status_left_style = ExpandTwice WithoutStrftime (bareOption StatusLeftStyle)
+  let _E                ∷ FormatSpecifier α → FormatSpecifier α
+      _E                = ExpandTwice WithoutStrftime
+      status_left_style ∷ FormatSpecifier StyleOption
+      status_left_style = _E $ bareOption StatusLeftStyle
       status_left       ∷ FormatSpecifier FormatOption
       status_left       = bareOption StatusLeft
+      user_foobie       ∷ UserOption
+      user_foobie       = userOption "@foobie"
+      bare_foobie       ∷ FormatSpecifier UserOption
+      bare_foobie       = bareOption user_foobie
+      bare_wname        ∷ FormatSpecifier FormatVariable
+      bare_wname        = bareOption WindowName
       ts_ :: [(𝕋,Format SavedDefault)]
       ts_ =
         let left_style_status :: Style
@@ -325,18 +333,16 @@ tests =
               , toFormat left_style_status
               )
             , ( "#{window_name}", toFormat WindowName )
-            , ( "#{@foobie}", toFormat $ userOption "@foobie" )
-            , ( "#{=3:window_name}",
-                toFormat $ MaxLen (FixedLen 3) (bareOption WindowName) )
+            , ( "#{@foobie}", toFormat $ user_foobie )
+            , ( "#{=3:window_name}", toFormat $ MaxLen (FixedLen 3) bare_wname )
             , ( "#{=/#{status-left-length}:window_name}",
-                toFormat $ MaxLen (OptLen StatusLeftLength) (bareOption WindowName) )
+                toFormat $ MaxLen (OptLen StatusLeftLength) bare_wname )
             , ( "#{T:@foobie}",
                 toFormat $ ExpandTwice WithStrftime
-                         $ bareOption $ userOption "@foobie" )
+                         $ bare_foobie )
             , ( "#{E;=3:@foobie}", -- "#{=3:#{E:@foobie}}" would also work, less compact
                 toFormat $
-                  MaxLen (FixedLen 3) (ExpandTwice WithoutStrftime $
-                                         bareOption $ userOption "@foobie") )
+                  MaxLen (FixedLen 3) (_E bare_foobie) )
 
             {- The ordering of the T and the =1 doesn't matter; the T always effects:
                > $ tmux set-option @foobie %Y-%M-%d
@@ -346,18 +352,14 @@ tests =
                > 2
             -}
             , ( "#{T;=3:@foobie}",
-                toFormat $ ExpandTwice WithStrftime $ MaxLen (FixedLen 3) $
-                                                  bareOption $ userOption "@foobie")
+                toFormat $ ExpandTwice WithStrftime $ MaxLen (FixedLen 3) bare_foobie)
 
             , ( "#{T;=3:@foobie}",
-                toFormat $ MaxLen (FixedLen 3) $ ExpandTwice WithStrftime $
-                                                  bareOption $ userOption "@foobie")
+                toFormat $ MaxLen (FixedLen 3) $ ExpandTwice WithStrftime bare_foobie)
             , ( "#{=/#{status-left-length}:window_name}",
-                toFormat $ MaxLen (OptLen StatusLeftLength)
-                                  (bareOption WindowName) )
+                toFormat $ MaxLen (OptLen StatusLeftLength) bare_wname )
             , ( "#{E;=3:window_name}",
-                toFormat $ ExpandTwice WithoutStrftime
-                         $ MaxLen (FixedLen 3) (bareOption WindowName) )
+                toFormat $ _E $ MaxLen (FixedLen 3) bare_wname )
             , ( ю [ "#[push-default]"
                   , "#{T;=/#{status-left-length}:status-left}"
                   , "#[pop-default]" ]
