@@ -13,11 +13,7 @@ import Prelude  ( error )
 -- base --------------------------------
 
 import Data.List   ( reverse, sortOn )
-import Data.Maybe  ( catMaybes, isJust )
-
--- base-unicode-symbols ----------------
-
-import Data.Bool.Unicode  ( (∧) )
+import Data.Maybe  ( catMaybes )
 
 -- monadio-plus ------------------------
 
@@ -25,7 +21,6 @@ import MonadIO  ( say )
 
 -- more-unicode ------------------------
 
-import Data.MoreUnicode.Maybe  ( (⧐) )
 import Data.MoreUnicode.Lens   ( (⊩) )
 import Data.MoreUnicode.Maybe  ( pattern 𝓙, pattern 𝓝 )
 
@@ -219,47 +214,19 @@ innerFormatSpecifier (ExpandTwice _ fs) = 𝓙 fs
 --------------------
 
 instance (Show α, ToFormat α, Printable α) => Printable (FormatSpecifier α) where
-  print (BareOption t) = print t -- P.text $ [fmt|#{%T}|] t
---  print (ExpandTwice withStrftime (BareOption o)) =
---    P.text $ [fmt|A#{%T:%t}|] (toText withStrftime) (toText o)
--- XX do we still need these?
-{-
-  print e@(ExpandTwice withStrftime t) =
-    if stackRank t > stackRank e
-    then P.text $ [fmt|#{%T:%T} (t)|] (toText withStrftime) (toFormat t)  -- (toText t)
-    else P.text $ [fmt|#{%T:%T} <-|] (toText withStrftime) (toFormat t)
--}
+  print (BareOption  t)            = print t
   print (ExpandTwice w_strftime _) = P.text $ [fmt|%T|] w_strftime
-  print (MaxLen len_spec _) = P.text $ [fmt|%T|] len_spec
--- XXX REMOVE THIS
-  print o = error $ [fmt|print fail: %w|] o
+  print (MaxLen      len_spec   _) = P.text $ [fmt|%T|] len_spec
 
 --------------------
 
--- internal helper functions for ToFormat
-ifsExpandTwice with_strftime fs =
-  case innerFormatSpecifier fs of
-    𝓙 ifs → Format $ [fmt|#{%T;%T:%T}|] with_strftime fs (toFormat ifs)
-    𝓝     → Format $ [fmt|C#{%T:%T}|] with_strftime fs
-
-ifsMaxLen len_spec fs =
-  case innerFormatSpecifier fs of
-    𝓙 ifs → Format $ [fmt|H#{%T:%T}|] len_spec (toFormat fs)
-    𝓝     → Format $ [fmt|G#{%T:%T}|] len_spec fs
-
-toFormat_ ∷ (Printable α, Show α, ToFormat α) => FormatSpecifier α → Format β
-toFormat_ (MaxLen l_spec fs) | stackRank fs > 0 = ifsMaxLen l_spec fs
-                             | otherwise = Format $ [fmt|#{%T:%T}|] l_spec ( fs)
-
-toFormat__ ∷ (Printable α, Show α) => FormatSpecifier α → Format β
-toFormat__ (BareOption o) = Format $ [fmt|#{%T}|] o
-toFormat__ x = Format $ [fmt|UUU [%w]|] x
-
-toStackedFormat ∷ (Printable α, ToFormat α, Show α) => [FormatSpecifier α] → FormatSpecifier α → Format β
+toStackedFormat ∷ (Printable α, ToFormat α, Show α) =>
+                  [FormatSpecifier α] → FormatSpecifier α → Format β
 toStackedFormat stack ofs =
   case innerFormatSpecifier ofs of
     𝓙 ifs → toStackedFormat (ofs:stack) ifs
-    𝓝     → Format $ [fmt|#{%t:%T}|] (T.intercalate ";" $ toText ⊳ (reverse $ sortOn stackRank stack)) (ofs)
+    𝓝     → let stck = toText ⊳ reverse (sortOn stackRank stack)
+             in  Format $ [fmt|#{%t:%T}|] (T.intercalate ";" $ stck) ofs
 
 instance (Show α, ToFormat α, Printable α) => ToFormat (FormatSpecifier α) where
   -- each output has a leading character, A…; they are removed only if there is a
@@ -269,28 +236,6 @@ instance (Show α, ToFormat α, Printable α) => ToFormat (FormatSpecifier α) w
 --                                       | otherwise = Format $ [fmt|#{%T:%T}|] w_strftime fs
 
   toFormat ofs = toStackedFormat [] ofs
-  toFormat ofs =
-    case innerFormatSpecifier ofs of
-      𝓙 ifs → if stackRank ifs ≡ 0 ∨ stackRank ofs ≡ 0
-              then toFormat_ ofs -- [fmt|XXX %w // %w|] ofs ifs
-              else if (stackRank ifs > stackRank ofs)
-                   then Format $ [fmt|ZZZ %T [%T] <%T> (%d) %w|] ifs (toFormat ifs) ( ofs) (stackRank ifs) ofs
-                   else Format $ [fmt|WWW (%d) %w|] (stackRank ifs) ofs
-      𝓝     → Format $ [fmt|YYY %w|] ofs
-
-  toFormat (MaxLen len_spec (BareOption o)) =
-    Format $ [fmt|#{%T:%T}|] len_spec (o)
-
-  toFormat (MaxLen l_spec fs) | stackRank fs > 0 = ifsMaxLen l_spec fs
-                              | otherwise = Format $ [fmt|H#{%T:%T}|] l_spec (toFormat fs)
-
-  toFormat (MaxLen (OptLen l) (BareOption o)) =
-    -- the / acts as a separator between the '=' and the #{…}.  I can't find
-    -- any direct documentation for it in tmux; experimentation shows it to be
-    -- required
-    Format $ [fmt|I#{=/%T:%T}|] (toFormat l) (toText o)
-  toFormat (MaxLen (OptLen l) f) =
-    Format $ [fmt|J#{=/%T:%T}|] (toFormat l) (toText f)
 
 bareOption ∷ α → FormatSpecifier α
 bareOption = BareOption ∘ Option
@@ -344,34 +289,30 @@ tests =
             , ( "#{=/#{status-left-length}:window_name}",
                 toFormat $ len_left_length bare_wname )
             , ( "#{T:@foobie}",
-                toFormat $ ExpandTwice WithStrftime
-                         $ bare_foobie )
+                toFormat $ ExpandTwice WithStrftime $ bare_foobie )
             , ( "#{E;=3:@foobie}",
                 -- "#{=3:#{E:@foobie}}" would also work, but is less compact
-                toFormat $
-                  len3 (_E bare_foobie) )
+                toFormat $ len3 (_E bare_foobie) )
 
-            {- The ordering of the T and the =1 doesn't matter; the T always effects:
+            {- The ordering of the T and the =1 doesn't matter; the T always
+               effects:
                > $ tmux set-option @foobie %Y-%M-%d
                > $ tmux display-message -p '#{T;=/1:#{@foobie}}'
                > 2
                > $ tmux display-message -p '#{=/1:#{T:@foobie}}'
                > 2
             -}
-            , ( "#{T;=3:@foobie}",
-                toFormat $ _T $ len3 bare_foobie)
+            , ( "#{T;=3:@foobie}", toFormat $ _T $ len3 bare_foobie)
 
-            , ( "#{T;=3:@foobie}",
-                toFormat $ len3 $ _T bare_foobie)
+            , ( "#{T;=3:@foobie}", toFormat $ len3 $ _T bare_foobie)
             , ( "#{=/#{status-left-length}:window_name}",
                 toFormat $ len_left_length bare_wname )
-            , ( "#{E;=3:window_name}",
-                toFormat $ _E $ len3 bare_wname )
+            , ( "#{E;=3:window_name}", toFormat $ _E $ len3 bare_wname )
             , ( ю [ "#[push-default]"
                   , "#{T;=/#{status-left-length}:status-left}"
                   , "#[pop-default]" ]
               , saveDefault $ toFormat (_T $ len_left_length status_left)
-            )
+              )
             ]
       do_test :: (𝕋, Format SavedDefault) → TestTree
       do_test (t,x) = testCase (T.unpack t) (t @=? toText x)
