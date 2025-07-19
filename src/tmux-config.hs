@@ -96,11 +96,11 @@ userOption t                         = error $ "userOption: '" ◇ T.unpack t �
 
 ------------------------------------------------------------
 
-data FormatOption = StatusLeft
-  deriving Show
+data FormatOption = StatusLeft | StatusRight deriving Show
 
 instance Printable FormatOption where
   print StatusLeft = P.text "status-left"
+  print StatusRight = P.text "status-right"
 
 instance ToFormat FormatOption where
   toFormat o = Format $ [fmt|#{%T}|] o
@@ -118,10 +118,11 @@ instance Printable FormatVariable where
 ------------------------------------------------------------
 
 {-| Tmux "options" that evaluate to an integer value -}
-data IntOption = StatusLeftLength deriving Show
+data IntOption = StatusLeftLength | StatusRightLength deriving Show
 
 instance Printable IntOption where
-  print StatusLeftLength = P.text "status-left-length"
+  print StatusLeftLength  = P.text "status-left-length"
+  print StatusRightLength = P.text "status-right-length"
 
 instance ToFormat IntOption where
   toFormat io = Format $ [fmt|#{%T}|] io
@@ -292,12 +293,16 @@ tests =
       len3               = MaxLen $ FixedLen 3
       len_left_length    ∷ FormatSpecifier α → FormatSpecifier α
       len_left_length    = MaxLen $ OptLen StatusLeftLength
+      len_right_length   ∷ FormatSpecifier α → FormatSpecifier α
+      len_right_length   = MaxLen $ OptLen StatusRightLength
       status_left_style  ∷ FormatSpecifier StyleOption
       status_left_style  = _E $ bareOption StatusLeftStyle
       status_right_style ∷ FormatSpecifier StyleOption
       status_right_style = _E $ bareOption StatusRightStyle
       status_left        ∷ FormatSpecifier FormatOption
       status_left        = bareOption StatusLeft
+      status_right       ∷ FormatSpecifier FormatOption
+      status_right       = bareOption StatusRight
       user_foobie        ∷ UserOption
       user_foobie        = userOption "@foobie"
       bare_foobie        ∷ FormatSpecifier UserOption
@@ -343,7 +348,6 @@ tests =
                   , "#[pop-default]" ]
               , saveDefault $ toFormat (_T $ len_left_length status_left)
               )
-
             , ( ю [ "#[norange default]"
                   , "#[nolist align=right range=right #{E:status-right-style}]"
                   ]
@@ -355,12 +359,14 @@ tests =
                                       & stylePayload ⊩ status_right_style
                          ]
               )
+
             , ( ю [ "#[push-default]"
-                  , "#{T;=|#{status-right-length}:status-right}"
+                  , "#{T;=/#{status-right-length}:status-right}"
                   , "#[pop-default]"
                   ]
-              , saveDefault $ toFormat (_T $ len_left_length status_left)
+              , saveDefault $ toFormat (_T $ len_right_length status_right)
               )
+
             , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                   ]
               , saveDefault $ toFormat (_T $ len_left_length status_left)
