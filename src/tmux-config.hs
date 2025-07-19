@@ -56,15 +56,19 @@ instance Printable (Format α) where
 class ToFormat α where
   toFormat :: α -> Format β
 
+instance ToFormat α => ToFormat [α] where
+  toFormat as = Format $ ю [ unFormat $ toFormat a | a ← as ]
+
 saveDefault ∷ Format UnsavedDefault → Format SavedDefault
 saveDefault f = Format $ "#[push-default]" ⊕ toText f ⊕ "#[pop-default]"
 
 ------------------------------------------------------------
 
-data StyleOption = StatusLeftStyle deriving Show
+data StyleOption = StatusLeftStyle | StatusRightStyle deriving Show
 
 instance Printable StyleOption where
-  print StatusLeftStyle = P.text "status-left-style"
+  print StatusLeftStyle  = P.text "status-left-style"
+  print StatusRightStyle = P.text "status-right-style"
 
 instance ToFormat StyleOption where
   toFormat o = Format $ [fmt|%T|] o
@@ -132,42 +136,66 @@ newtype Option α = Option α
 data Alignment = AlignLeft | AlignRight | AlignCentre
 
 instance Printable Alignment where
-  print AlignLeft   = P.text "left"
-  print AlignCentre = P.text "centre"
-  print AlignRight  = P.text "right"
+  print AlignLeft   = P.text "align=left"
+  print AlignCentre = P.text "align=centre"
+  print AlignRight  = P.text "align=right"
 
 ------------------------------------------------------------
 
-data RangeStyle = RangeLeft | RangeRight
+data RangeStyle = RangeLeft | RangeRight | RangeNone
 
 instance Printable RangeStyle where
-  print RangeLeft  = P.text "left"
-  print RangeRight = P.text "right"
+  print RangeLeft  = P.text "range=left"
+  print RangeRight = P.text "range=right"
+  print RangeNone  = P.text "norange"
 
 ------------------------------------------------------------
 
-data Style = Style { _align        :: 𝕄 Alignment
-                   , _range        :: 𝕄 RangeStyle
-                   , _stylePayload :: 𝕄 (FormatSpecifier StyleOption)
+data ListStyle = ListLeftMarker | ListRightMarker | ListNone
+
+instance Printable ListStyle where
+  print ListLeftMarker  = P.text "list=left-marker"
+  print ListRightMarker = P.text "list=right-marker"
+  print ListNone        = P.text "nolist"
+
+------------------------------------------------------------
+
+data StyleDefault = StyleDefault | NoStyleDefault
+
+data Style = Style { _styleDefault ∷ StyleDefault
+                   , _alignStyle   ∷ 𝕄 Alignment
+                   , _rangeStyle   ∷ 𝕄 RangeStyle
+                   , _listStyle    ∷ 𝕄 ListStyle
+                   , _stylePayload ∷ 𝕄 (FormatSpecifier StyleOption)
                    }
 
-align :: Lens' Style (𝕄 Alignment)
-align = lens _align (\ s a -> s { _align = a })
+alignStyle :: Lens' Style (𝕄 Alignment)
+alignStyle = lens _alignStyle (\ s a -> s { _alignStyle = a })
 
-range :: Lens' Style (𝕄 RangeStyle)
-range = lens _range (\ s a -> s { _range = a })
+rangeStyle :: Lens' Style (𝕄 RangeStyle)
+rangeStyle = lens _rangeStyle (\ s a -> s { _rangeStyle = a })
+
+styleDefault :: Lens' Style StyleDefault
+styleDefault = lens _styleDefault (\ s a -> s { _styleDefault = a })
+
+listStyle :: Lens' Style (𝕄 ListStyle)
+listStyle = lens _listStyle (\ s a -> s { _listStyle = a })
 
 stylePayload ∷ Lens' Style (𝕄 (FormatSpecifier StyleOption))
 stylePayload = lens _stylePayload (\ s a -> s { _stylePayload = a })
 
 emptyStyle :: Style
-emptyStyle = Style 𝓝 𝓝 𝓝
+emptyStyle = Style NoStyleDefault 𝓝 𝓝 𝓝 𝓝
 
 instance ToFormat Style where
   toFormat s =
-    let pieces = [ [fmt|align=%T|] ⊳ (s ⊣ align)
-                 , [fmt|range=%T|] ⊳ (s ⊣ range)
+    let pieces = [ [fmt|%T|] ⊳ (s ⊣ listStyle)
+                 , [fmt|%T|] ⊳ (s ⊣ alignStyle)
+                 , [fmt|%T|] ⊳ (s ⊣ rangeStyle)
                  , toText ∘ toFormat ⊳ (s ⊣ stylePayload)
+                 , case s ⊣ styleDefault of
+                     StyleDefault   → 𝓙 "default"
+                     NoStyleDefault → 𝓝
                  ]
     in  Format $ [fmt|#[%t]|] (T.intercalate " " $ catMaybes pieces)
 
@@ -245,8 +273,8 @@ bareOption = BareOption ∘ Option
 
 main :: IO ()
 main = do
-  say $ toFormat (emptyStyle & align ⊩ AlignLeft
-                             & range ⊩ RangeLeft
+  say $ toFormat (emptyStyle & alignStyle   ⊩ AlignLeft
+                             & rangeStyle   ⊩ RangeLeft
                              & stylePayload ⊩ ExpandTwice WithoutStrftime (bareOption StatusLeftStyle)
                  )
 
@@ -256,29 +284,31 @@ main = do
 
 tests ∷ TestTree
 tests =
-  let _E                ∷ FormatSpecifier α → FormatSpecifier α
-      _E                = ExpandTwice WithoutStrftime
-      _T                ∷ FormatSpecifier α → FormatSpecifier α
-      _T                = ExpandTwice WithStrftime
-      len3              ∷ FormatSpecifier α → FormatSpecifier α
-      len3              = MaxLen $ FixedLen 3
-      len_left_length   ∷ FormatSpecifier α → FormatSpecifier α
-      len_left_length   = MaxLen $ OptLen StatusLeftLength
-      status_left_style ∷ FormatSpecifier StyleOption
-      status_left_style = _E $ bareOption StatusLeftStyle
-      status_left       ∷ FormatSpecifier FormatOption
-      status_left       = bareOption StatusLeft
-      user_foobie       ∷ UserOption
-      user_foobie       = userOption "@foobie"
-      bare_foobie       ∷ FormatSpecifier UserOption
-      bare_foobie       = bareOption user_foobie
-      bare_wname        ∷ FormatSpecifier FormatVariable
-      bare_wname        = bareOption WindowName
+  let _E                 ∷ FormatSpecifier α → FormatSpecifier α
+      _E                 = ExpandTwice WithoutStrftime
+      _T                 ∷ FormatSpecifier α → FormatSpecifier α
+      _T                 = ExpandTwice WithStrftime
+      len3               ∷ FormatSpecifier α → FormatSpecifier α
+      len3               = MaxLen $ FixedLen 3
+      len_left_length    ∷ FormatSpecifier α → FormatSpecifier α
+      len_left_length    = MaxLen $ OptLen StatusLeftLength
+      status_left_style  ∷ FormatSpecifier StyleOption
+      status_left_style  = _E $ bareOption StatusLeftStyle
+      status_right_style ∷ FormatSpecifier StyleOption
+      status_right_style = _E $ bareOption StatusRightStyle
+      status_left        ∷ FormatSpecifier FormatOption
+      status_left        = bareOption StatusLeft
+      user_foobie        ∷ UserOption
+      user_foobie        = userOption "@foobie"
+      bare_foobie        ∷ FormatSpecifier UserOption
+      bare_foobie        = bareOption user_foobie
+      bare_wname         ∷ FormatSpecifier FormatVariable
+      bare_wname         = bareOption WindowName
       ts_ :: [(𝕋,Format SavedDefault)]
       ts_ =
         let left_style_status :: Style
-            left_style_status = emptyStyle & align        ⊩ AlignLeft
-                                           & range        ⊩ RangeLeft
+            left_style_status = emptyStyle & alignStyle   ⊩ AlignLeft
+                                           & rangeStyle   ⊩ RangeLeft
                                            & stylePayload ⊩ status_left_style
         in  [ ( "#{window_name}", toFormat WindowName )
             , ( "#{@foobie}", toFormat $ user_foobie )
@@ -317,7 +347,13 @@ tests =
             , ( ю [ "#[norange default]"
                   , "#[nolist align=right range=right #{E:status-right-style}]"
                   ]
-              , saveDefault $ toFormat (_T $ len_left_length status_left)
+              , toFormat [ emptyStyle & rangeStyle   ⊩ RangeNone
+                                      & styleDefault ⊢ StyleDefault
+                         , emptyStyle & listStyle    ⊩ ListNone
+                                      & alignStyle   ⊩ AlignRight
+                                      & rangeStyle   ⊩ RangeRight
+                                      & stylePayload ⊩ status_right_style
+                         ]
               )
             , ( ю [ "#[push-default]"
                   , "#{T;=|#{status-right-length}:status-right}"
