@@ -280,10 +280,7 @@ tests =
             left_style_status = emptyStyle & align        ⊩ AlignLeft
                                            & range        ⊩ RangeLeft
                                            & stylePayload ⊩ status_left_style
-        in  [ ( "#[align=left range=left #{E:status-left-style}]"
-              , toFormat left_style_status
-              )
-            , ( "#{window_name}", toFormat WindowName )
+        in  [ ( "#{window_name}", toFormat WindowName )
             , ( "#{@foobie}", toFormat $ user_foobie )
             , ( "#{=3:window_name}", toFormat $ len3 bare_wname )
             , ( "#{=/#{status-left-length}:window_name}",
@@ -308,14 +305,37 @@ tests =
             , ( "#{=/#{status-left-length}:window_name}",
                 toFormat $ len_left_length bare_wname )
             , ( "#{E;=3:window_name}", toFormat $ _E $ len3 bare_wname )
+            , ( "#[align=left range=left #{E:status-left-style}]"
+              , toFormat left_style_status
+              )
             , ( ю [ "#[push-default]"
                   , "#{T;=/#{status-left-length}:status-left}"
                   , "#[pop-default]" ]
               , saveDefault $ toFormat (_T $ len_left_length status_left)
               )
+
+            , ( ю [ "#[norange default]"
+                  , "#[nolist align=right range=right #{E:status-right-style}]"
+                  ]
+              , saveDefault $ toFormat (_T $ len_left_length status_left)
+              )
+            , ( ю [ "#[push-default]"
+                  , "#{T;=|#{status-right-length}:status-right}"
+                  , "#[pop-default]"
+                  ]
+              , saveDefault $ toFormat (_T $ len_left_length status_left)
+              )
+            , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
+                  ]
+              , saveDefault $ toFormat (_T $ len_left_length status_left)
+              )
             ]
       do_test :: (𝕋, Format SavedDefault) → TestTree
-      do_test (t,x) = testCase (T.unpack t) (t @=? toText x)
+      do_test (t,x) = let tname = if T.length t > 60
+                                  then T.unpack (T.take 60 t) ◇ "…"
+                                  else T.unpack t
+
+                      in  testCase tname (t @=? toText x)
   in  testGroup "tests" $ do_test ⊳ ts_
 
 ----------------------------------------
