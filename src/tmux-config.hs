@@ -127,8 +127,8 @@ instance Printable IntOption where
   print StatusLeftLength  = P.text "status-left-length"
   print StatusRightLength = P.text "status-right-length"
 
-instance ToFormat IntOption where
-  toFormat io = Format $ [fmt|#{%T}|] io
+-- instance ToFormat IntOption where
+--   toFormat io = Format $ [fmt|#{%T}|] io
 
 ------------------------------------------------------------
 
@@ -137,12 +137,23 @@ newtype Option α = Option α
 
 ------------------------------------------------------------
 
-data Alignment = AlignLeft | AlignRight | AlignCentre
+data AlignOption = StatusJustify deriving Show
+
+instance Printable AlignOption where
+  print StatusJustify = P.text "status-justify"
+
+-- instance ToFormat AlignOption where
+--   toFormat ao = Format $ [fmt|#{%T}|] ao
+
+------------------------------------------------------------
+
+data Alignment = AlignLeft | AlignRight | AlignCentre | AlignOpt AlignOption
 
 instance Printable Alignment where
-  print AlignLeft   = P.text "align=left"
-  print AlignCentre = P.text "align=centre"
-  print AlignRight  = P.text "align=right"
+  print AlignLeft     = P.text "align=left"
+  print AlignCentre   = P.text "align=centre"
+  print AlignRight    = P.text "align=right"
+  print (AlignOpt ao) = P.text $ [fmt|align=#{%T}|] ao
 
 ------------------------------------------------------------
 
@@ -155,14 +166,16 @@ instance Printable RangeStyle where
 
 ------------------------------------------------------------
 
-data ListStyle = ListLeftMarker 𝕋 | ListRightMarker 𝕋 | ListNone
+data ListStyle = ListOn | ListLeftMarker 𝕋 | ListRightMarker 𝕋 | ListNone
 
 instance Printable ListStyle where
+  print ListOn              = P.text "list=on"
   print (ListLeftMarker _)  = P.text "list=left-marker"
   print (ListRightMarker _) = P.text "list=right-marker"
   print ListNone            = P.text "nolist"
 
 listPayload ∷ ListStyle → 𝕄 𝕋
+listPayload ListOn              = 𝓝
 listPayload (ListLeftMarker  t) = 𝓙 t
 listPayload (ListRightMarker t) = 𝓙 t
 listPayload ListNone            = 𝓝
@@ -376,16 +389,34 @@ tests =
               , saveDefault $ toFormat (_T $ len_right_length status_right)
               )
 
+            , ( "#[list=on align=#{status-justify}]"
+              , toFormat (emptyStyle & listStyle ⊩ ListOn
+                                     & alignStyle ⊩ AlignOpt StatusJustify)
+              )
+
+            , ( "#[list=left-marker]<"
+              , toFormat $ emptyStyle & listStyle ⊩ ListLeftMarker "<"
+              )
+
+            , ( "#[list=right-marker]>"
+              , toFormat $ emptyStyle & listStyle ⊩ ListRightMarker ">"
+              )
+
+            , ( "#[list=on]", toFormat ("#[list=on]" :: 𝕋) )
+
             , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                   ]
-              , toFormat [ "#[list=on align=#{status-justify}]" :: 𝕋
-                         , toText ∘ toFormat $ emptyStyle & listStyle ⊩ ListLeftMarker "<"
-                         ,  "#[list=right-marker]>"
+              , toFormat [ toText ∘ toFormat $
+                             emptyStyle & listStyle ⊩ ListOn
+                                        & alignStyle ⊩ AlignOpt StatusJustify
+                         , toText ∘ toFormat $
+                             emptyStyle & listStyle ⊩ ListLeftMarker "<"
+                         , toText ∘ toFormat $
+                             emptyStyle & listStyle ⊩ ListRightMarker ">"
                          , "#[list=on]"
                          , "#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                          ]
               )
-
             ]
       do_test :: (𝕋, Format SavedDefault) → TestTree
       do_test (t,x) = let tname = if T.length t > 60
