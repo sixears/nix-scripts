@@ -22,7 +22,7 @@ import MonadIO  ( say )
 -- more-unicode ------------------------
 
 import Data.MoreUnicode.Lens   ( (⊩) )
-import Data.MoreUnicode.Maybe  ( pattern 𝓙, pattern 𝓝 )
+import Data.MoreUnicode.Maybe  ( pattern 𝓙, pattern 𝓝, (⧐) )
 
 -- tasty -------------------------------
 
@@ -55,6 +55,9 @@ instance Printable (Format α) where
 
 class ToFormat α where
   toFormat :: α -> Format β
+
+instance ToFormat 𝕋 where
+  toFormat = Format
 
 instance ToFormat α => ToFormat [α] where
   toFormat as = Format $ ю [ unFormat $ toFormat a | a ← as ]
@@ -152,12 +155,17 @@ instance Printable RangeStyle where
 
 ------------------------------------------------------------
 
-data ListStyle = ListLeftMarker | ListRightMarker | ListNone
+data ListStyle = ListLeftMarker 𝕋 | ListRightMarker 𝕋 | ListNone
 
 instance Printable ListStyle where
-  print ListLeftMarker  = P.text "list=left-marker"
-  print ListRightMarker = P.text "list=right-marker"
-  print ListNone        = P.text "nolist"
+  print (ListLeftMarker _)  = P.text "list=left-marker"
+  print (ListRightMarker _) = P.text "list=right-marker"
+  print ListNone            = P.text "nolist"
+
+listPayload ∷ ListStyle → 𝕄 𝕋
+listPayload (ListLeftMarker  t) = 𝓙 t
+listPayload (ListRightMarker t) = 𝓙 t
+listPayload ListNone            = 𝓝
 
 ------------------------------------------------------------
 
@@ -198,7 +206,8 @@ instance ToFormat Style where
                      StyleDefault   → 𝓙 "default"
                      NoStyleDefault → 𝓝
                  ]
-    in  Format $ [fmt|#[%t]|] (T.intercalate " " $ catMaybes pieces)
+        payload = "" ⧐ (s ⊣ listStyle ≫ listPayload)
+    in  Format $ [fmt|#[%t]%t|] (T.intercalate " " $ catMaybes pieces) payload
 
 ------------------------------------------------------------
 
@@ -369,8 +378,14 @@ tests =
 
             , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                   ]
-              , saveDefault $ toFormat (_T $ len_left_length status_left)
+              , toFormat [ "#[list=on align=#{status-justify}]" :: 𝕋
+                         , toText ∘ toFormat $ emptyStyle & listStyle ⊩ ListLeftMarker "<"
+                         ,  "#[list=right-marker]>"
+                         , "#[list=on]"
+                         , "#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
+                         ]
               )
+
             ]
       do_test :: (𝕋, Format SavedDefault) → TestTree
       do_test (t,x) = let tname = if T.length t > 60
