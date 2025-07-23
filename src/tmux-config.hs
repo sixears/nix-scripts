@@ -26,7 +26,9 @@ import Data.MoreUnicode.Maybe  ( pattern 𝓙, pattern 𝓝, (⧐) )
 
 -- tasty -------------------------------
 
-import Test.Tasty  ( TestTree, testGroup )
+import Test.Tasty                              ( TestTree
+                                               , localOption, testGroup )
+import Test.Tasty.Ingredients.ConsoleReporter  ( UseColor( Never ) )
 
 -- tasty-hunit -------------------------
 
@@ -117,6 +119,29 @@ instance ToFormat FormatVariable where
 
 instance Printable FormatVariable where
   print WindowName = P.text "window_name"
+
+------------------------------------------------------------
+
+data BoolOption = WindowEndFlag deriving Show
+
+instance Printable BoolOption where
+  print WindowEndFlag = P.string $ show WindowEndFlag
+
+instance ToFormat BoolOption where
+  toFormat WindowEndFlag = Format "window_end_flag"
+
+------------------------------------------------------------
+
+data StringOption = WindowStatusSeparator | StringOptionText 𝕋 deriving Show
+
+instance Printable StringOption where
+  print (StringOptionText sot) = P.text sot
+  print WindowStatusSeparator  = "window-status-separator"
+  print so = P.string $ show so
+
+instance ToFormat StringOption where
+  toFormat WindowStatusSeparator = Format "window-status-separator"
+  toFormat (StringOptionText t)  = Format t
 
 ------------------------------------------------------------
 
@@ -255,8 +280,14 @@ data FormatSpecifier α = BareOption (Option α)
                        | ExpandTwice WithStrftime (FormatSpecifier α)
                        | MaxLen LenSpec (FormatSpecifier α)
                        | ForEachWindow α α
+                       | Conditional 𝕋 𝕋 𝕋
                        | BareText 𝕋
   deriving Show
+
+----------------------------------------
+
+conditional :: (ToFormat β, ToFormat γ) => BoolOption → β → γ → FormatSpecifier α
+conditional a b c = Conditional (toText $ toFormat a) (toText $ toFormat b) (toText $ toFormat c)
 
 ----------------------------------------
 
@@ -272,6 +303,7 @@ innerFormatSpecifier (BareOption    _)      = 𝓝
 innerFormatSpecifier (MaxLen        _  fs)  = 𝓙 fs
 innerFormatSpecifier (ExpandTwice   _  fs)  = 𝓙 fs
 innerFormatSpecifier (ForEachWindow _ _)    = 𝓝
+innerFormatSpecifier (Conditional   _ _ _)  = 𝓝
 innerFormatSpecifier (BareText      _)      = 𝓝
 
 --------------------
@@ -282,7 +314,10 @@ instance (Show α, ToFormat α, Printable α) => Printable (FormatSpecifier α) 
   print (MaxLen      len_spec   _) = P.text $ [fmt|%T|] len_spec
   print (ForEachWindow other current) =
     P.text $ [fmt|W:%T,%T|] (toFormat other) (toFormat current)
-  print (BareText  t)              = print t
+  print (Conditional condition ifthen ifelse) =
+    P.text $ [fmt|?%T,%T,%T|]
+                 (toFormat condition) (toFormat ifthen) (toFormat ifelse)
+  print (BareText  t)              = print $ "ZZZ" ◇ t
 
 --------------------
 
@@ -318,7 +353,7 @@ main = do
 --------------------------------------------------------------------------------
 
 tests ∷ TestTree
-tests =
+tests = localOption Never $
   let _E                 ∷ FormatSpecifier α → FormatSpecifier α
       _E                 = ExpandTwice WithoutStrftime
       _T                 ∷ FormatSpecifier α → FormatSpecifier α
@@ -424,6 +459,12 @@ tests =
                 toFormat (ForEachWindow (emptyStyle & listStyle ⊩ ListOn) (emptyStyle & listStyle ⊩ ListFocus))
               )
 
+            , ("#{?window_end_flag,,#{window-status-separator}}"
+              , toFormat @(FormatSpecifier 𝕋)
+                  (conditional WindowEndFlag (StringOptionText "")
+                                             (bareOption WindowStatusSeparator))
+              )
+
             , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                   ]
               , toFormat [ toText ∘ toFormat $
@@ -435,8 +476,11 @@ tests =
                              emptyStyle & listStyle ⊩ ListRightMarker ">"
                          , "#[list=on]"
                          , toText ∘ toFormat $
-                             ForEachWindow @(FormatSpecifier 𝕋) (BareText "#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}}") (BareText "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}")
---                         , "#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},", "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
+                             ForEachWindow @(FormatSpecifier 𝕋)
+                               (BareText $
+                                 (toText ∘ toFormat $ BareText @𝕋 "#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]")
+                                ◇ "#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}}")
+                               (BareText "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}")
                          ]
               )
 
