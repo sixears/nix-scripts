@@ -148,6 +148,7 @@ instance Printable AlignOption where
 ------------------------------------------------------------
 
 data Alignment = AlignLeft | AlignRight | AlignCentre | AlignOpt AlignOption
+  deriving Show
 
 instance Printable Alignment where
   print AlignLeft     = P.text "align=left"
@@ -157,7 +158,7 @@ instance Printable Alignment where
 
 ------------------------------------------------------------
 
-data RangeStyle = RangeLeft | RangeRight | RangeNone
+data RangeStyle = RangeLeft | RangeRight | RangeNone deriving Show
 
 instance Printable RangeStyle where
   print RangeLeft  = P.text "range=left"
@@ -166,23 +167,27 @@ instance Printable RangeStyle where
 
 ------------------------------------------------------------
 
-data ListStyle = ListOn | ListLeftMarker 𝕋 | ListRightMarker 𝕋 | ListNone
+data ListStyle = ListOn | ListFocus | ListLeftMarker 𝕋 | ListRightMarker 𝕋
+               | ListNone
+  deriving Show
 
 instance Printable ListStyle where
   print ListOn              = P.text "list=on"
+  print ListFocus           = P.text "list=focus"
   print (ListLeftMarker _)  = P.text "list=left-marker"
   print (ListRightMarker _) = P.text "list=right-marker"
   print ListNone            = P.text "nolist"
 
 listPayload ∷ ListStyle → 𝕄 𝕋
 listPayload ListOn              = 𝓝
+listPayload ListFocus           = 𝓝
 listPayload (ListLeftMarker  t) = 𝓙 t
 listPayload (ListRightMarker t) = 𝓙 t
 listPayload ListNone            = 𝓝
 
 ------------------------------------------------------------
 
-data StyleDefault = StyleDefault | NoStyleDefault
+data StyleDefault = StyleDefault | NoStyleDefault deriving Show
 
 data Style = Style { _styleDefault ∷ StyleDefault
                    , _alignStyle   ∷ 𝕄 Alignment
@@ -190,6 +195,7 @@ data Style = Style { _styleDefault ∷ StyleDefault
                    , _listStyle    ∷ 𝕄 ListStyle
                    , _stylePayload ∷ 𝕄 (FormatSpecifier StyleOption)
                    }
+  deriving Show
 
 alignStyle :: Lens' Style (𝕄 Alignment)
 alignStyle = lens _alignStyle (\ s a -> s { _alignStyle = a })
@@ -208,6 +214,8 @@ stylePayload = lens _stylePayload (\ s a -> s { _stylePayload = a })
 
 emptyStyle :: Style
 emptyStyle = Style NoStyleDefault 𝓝 𝓝 𝓝 𝓝
+
+instance Printable Style where print s = P.string (show s)
 
 instance ToFormat Style where
   toFormat s =
@@ -246,6 +254,8 @@ instance Printable WithStrftime where
 data FormatSpecifier α = BareOption (Option α)
                        | ExpandTwice WithStrftime (FormatSpecifier α)
                        | MaxLen LenSpec (FormatSpecifier α)
+                       | ForEachWindow α α
+                       | BareText 𝕋
   deriving Show
 
 ----------------------------------------
@@ -258,9 +268,11 @@ stackRank _                 = 0
 ----------------------------------------
 
 innerFormatSpecifier :: FormatSpecifier α → 𝕄 (FormatSpecifier α)
-innerFormatSpecifier (BareOption  _)    = 𝓝
-innerFormatSpecifier (MaxLen      _ fs) = 𝓙 fs
-innerFormatSpecifier (ExpandTwice _ fs) = 𝓙 fs
+innerFormatSpecifier (BareOption    _)      = 𝓝
+innerFormatSpecifier (MaxLen        _  fs)  = 𝓙 fs
+innerFormatSpecifier (ExpandTwice   _  fs)  = 𝓙 fs
+innerFormatSpecifier (ForEachWindow _ _)    = 𝓝
+innerFormatSpecifier (BareText      _)      = 𝓝
 
 --------------------
 
@@ -268,6 +280,9 @@ instance (Show α, ToFormat α, Printable α) => Printable (FormatSpecifier α) 
   print (BareOption  t)            = print t
   print (ExpandTwice w_strftime _) = P.text $ [fmt|%T|] w_strftime
   print (MaxLen      len_spec   _) = P.text $ [fmt|%T|] len_spec
+  print (ForEachWindow other current) =
+    P.text $ [fmt|W:%T,%T|] (toFormat other) (toFormat current)
+  print (BareText  t)              = print t
 
 --------------------
 
@@ -275,18 +290,15 @@ toStackedFormat ∷ (Printable α, ToFormat α, Show α) =>
                   [FormatSpecifier α] → FormatSpecifier α → Format β
 toStackedFormat stack ofs =
   case innerFormatSpecifier ofs of
-    𝓙 ifs → toStackedFormat (ofs:stack) ifs
-    𝓝     → let stck = toText ⊳ reverse (sortOn stackRank stack)
-             in  Format $ [fmt|#{%t:%T}|] (T.intercalate ";" $ stck) ofs
+    𝓙 (  ifs) → toStackedFormat (ofs:stack) ifs
+    _          → case toText ⊳ reverse (sortOn stackRank stack) of
+                   []   → Format $ [fmt|#{%T}|] ofs
+                   stck → Format $ [fmt|#{%t:%T}|] (T.intercalate ";" stck) ofs
 
 instance (Show α, ToFormat α, Printable α) => ToFormat (FormatSpecifier α) where
-  -- each output has a leading character, A…; they are removed only if there is a
-  -- passing test for that
   toFormat (BareOption o) = Format $ [fmt|#{%T}|] o
---  toFormat (ExpandTwice w_strftime fs) | stackRank fs > 0 = ifsExpandTwice w_strftime fs
---                                       | otherwise = Format $ [fmt|#{%T:%T}|] w_strftime fs
-
-  toFormat ofs = toStackedFormat [] ofs
+  toFormat (BareText   t) = Format t
+  toFormat ofs            = toStackedFormat [] ofs
 
 bareOption ∷ α → FormatSpecifier α
 bareOption = BareOption ∘ Option
@@ -402,7 +414,15 @@ tests =
               , toFormat $ emptyStyle & listStyle ⊩ ListRightMarker ">"
               )
 
-            , ( "#[list=on]", toFormat ("#[list=on]" :: 𝕋) )
+            , ( "#[list=on]", toFormat (emptyStyle & listStyle ⊩ ListOn) )
+
+            , ( "#{W:#{status-left},#{status-right}}",
+                toFormat (ForEachWindow status_left status_right)
+              )
+
+            , ( "#{W:#[list=on],#[list=focus]}",
+                toFormat (ForEachWindow (emptyStyle & listStyle ⊩ ListOn) (emptyStyle & listStyle ⊩ ListFocus))
+              )
 
             , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                   ]
@@ -414,9 +434,12 @@ tests =
                          , toText ∘ toFormat $
                              emptyStyle & listStyle ⊩ ListRightMarker ">"
                          , "#[list=on]"
-                         , "#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
+                         , toText ∘ toFormat $
+                             ForEachWindow @(FormatSpecifier 𝕋) (BareText "#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}}") (BareText "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}")
+--                         , "#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},", "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                          ]
               )
+
             ]
       do_test :: (𝕋, Format SavedDefault) → TestTree
       do_test (t,x) = let tname = if T.length t > 60
