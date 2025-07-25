@@ -50,13 +50,18 @@ import qualified Text.Printer  as P
 
 data SavedDefault -- = SavedDefault
 data UnsavedDefault -- = UnsavedDefault
+-- a Format is basically a newtype around Text, but used with
+-- SavedDefault or UnsavedDefault
 newtype Format α = Format { unFormat ∷ 𝕋 }
 
 instance Printable (Format α) where
   print = P.text ∘ unFormat
 
 class ToFormat α where
-  toFormat :: α -> Format β
+  toFormat :: α -> Format UnsavedDefault
+
+instance ToFormat () where
+  toFormat () = Format ""
 
 instance ToFormat 𝕋 where
   toFormat = Format
@@ -64,16 +69,23 @@ instance ToFormat 𝕋 where
 instance ToFormat α => ToFormat [α] where
   toFormat as = Format $ ю [ unFormat $ toFormat a | a ← as ]
 
-saveDefault ∷ Format UnsavedDefault → Format SavedDefault
-saveDefault f = Format $ "#[push-default]" ⊕ toText f ⊕ "#[pop-default]"
+-- saveDefault ∷ Format UnsavedDefault → Format SavedDefault
+-- saveDefault f = Format $ "#[push-default]" ⊕ toText f ⊕ "#[pop-default]"
+
+saveDefault ∷ ToFormat α => α → Format SavedDefault
+saveDefault f = Format $ "#[push-default]" ⊕ toText (toFormat f) ⊕ "#[pop-default]"
+
+noSaveDefault ∷ Format UnsavedDefault → Format SavedDefault
+noSaveDefault = Format ∘ unFormat
 
 ------------------------------------------------------------
 
-data StyleOption = StatusLeftStyle | StatusRightStyle deriving Show
+data StyleOption = StatusLeftStyle | StatusRightStyle | StyleText 𝕋 deriving Show
 
 instance Printable StyleOption where
   print StatusLeftStyle  = P.text "status-left-style"
   print StatusRightStyle = P.text "status-right-style"
+  print (StyleText t)    = P.text t
 
 instance ToFormat StyleOption where
   toFormat o = Format $ [fmt|%T|] o
@@ -101,11 +113,12 @@ userOption t                         = error $ "userOption: '" ◇ T.unpack t �
 
 ------------------------------------------------------------
 
-data FormatOption = StatusLeft | StatusRight deriving Show
+data FormatOption = StatusLeft | StatusRight | WindowStatusFormat deriving Show
 
 instance Printable FormatOption where
-  print StatusLeft = P.text "status-left"
-  print StatusRight = P.text "status-right"
+  print StatusLeft         = P.text "status-left"
+  print StatusRight        = P.text "status-right"
+  print WindowStatusFormat = P.text "window-status-format"
 
 instance ToFormat FormatOption where
   toFormat o = Format $ [fmt|#{%T}|] o
@@ -137,7 +150,6 @@ data StringOption = WindowStatusSeparator | StringOptionText 𝕋 deriving Show
 instance Printable StringOption where
   print (StringOptionText sot) = P.text sot
   print WindowStatusSeparator  = "window-status-separator"
-  print so = P.string $ show so
 
 instance ToFormat StringOption where
   toFormat WindowStatusSeparator = Format "window-status-separator"
@@ -146,14 +158,16 @@ instance ToFormat StringOption where
 ------------------------------------------------------------
 
 {-| Tmux "options" that evaluate to an integer value -}
-data IntOption = StatusLeftLength | StatusRightLength deriving Show
+data IntOption = StatusLeftLength | StatusRightLength | WindowIndex
+  deriving Show
 
 instance Printable IntOption where
   print StatusLeftLength  = P.text "status-left-length"
   print StatusRightLength = P.text "status-right-length"
+  print WindowIndex       = P.text "window_index"
 
--- instance ToFormat IntOption where
---   toFormat io = Format $ [fmt|#{%T}|] io
+instance ToFormat IntOption where
+  toFormat io = Format $ [fmt|#{%T}|] io
 
 ------------------------------------------------------------
 
@@ -183,12 +197,15 @@ instance Printable Alignment where
 
 ------------------------------------------------------------
 
-data RangeStyle = RangeLeft | RangeRight | RangeNone deriving Show
+data RangeStyle = RangeLeft | RangeRight | RangeNone
+                | RangeWindow IntOption
+  deriving Show
 
 instance Printable RangeStyle where
-  print RangeLeft  = P.text "range=left"
-  print RangeRight = P.text "range=right"
-  print RangeNone  = P.text "norange"
+  print RangeLeft        = P.text "range=left"
+  print RangeRight       = P.text "range=right"
+  print RangeNone        = P.text "norange"
+  print (RangeWindow io) = P.text $ [fmt|range=window|%T|] (toFormat io)
 
 ------------------------------------------------------------
 
@@ -214,35 +231,35 @@ listPayload ListNone            = 𝓝
 
 data StyleDefault = StyleDefault | NoStyleDefault deriving Show
 
-data Style = Style { _styleDefault ∷ StyleDefault
-                   , _alignStyle   ∷ 𝕄 Alignment
-                   , _rangeStyle   ∷ 𝕄 RangeStyle
-                   , _listStyle    ∷ 𝕄 ListStyle
-                   , _stylePayload ∷ 𝕄 (FormatSpecifier StyleOption)
-                   }
+data Style α = Style { _styleDefault ∷ StyleDefault
+                     , _alignStyle   ∷ 𝕄 Alignment
+                     , _rangeStyle   ∷ 𝕄 RangeStyle
+                     , _listStyle    ∷ 𝕄 ListStyle
+                     , _stylePayload ∷ 𝕄 α
+                     }
   deriving Show
 
-alignStyle :: Lens' Style (𝕄 Alignment)
+alignStyle :: Lens' (Style α) (𝕄 Alignment)
 alignStyle = lens _alignStyle (\ s a -> s { _alignStyle = a })
 
-rangeStyle :: Lens' Style (𝕄 RangeStyle)
+rangeStyle :: Lens' (Style α) (𝕄 RangeStyle)
 rangeStyle = lens _rangeStyle (\ s a -> s { _rangeStyle = a })
 
-styleDefault :: Lens' Style StyleDefault
+styleDefault :: Lens' (Style α) StyleDefault
 styleDefault = lens _styleDefault (\ s a -> s { _styleDefault = a })
 
-listStyle :: Lens' Style (𝕄 ListStyle)
+listStyle :: Lens' (Style α) (𝕄 ListStyle)
 listStyle = lens _listStyle (\ s a -> s { _listStyle = a })
 
-stylePayload ∷ Lens' Style (𝕄 (FormatSpecifier StyleOption))
+stylePayload ∷ Lens' (Style α) (𝕄 α)
 stylePayload = lens _stylePayload (\ s a -> s { _stylePayload = a })
 
-emptyStyle :: Style
+emptyStyle :: Style α
 emptyStyle = Style NoStyleDefault 𝓝 𝓝 𝓝 𝓝
 
-instance Printable Style where print s = P.string (show s)
+instance Show α => Printable (Style α) where print s = P.string (show s)
 
-instance ToFormat Style where
+instance ToFormat α => ToFormat (Style α) where
   toFormat s =
     let pieces = [ [fmt|%T|] ⊳ (s ⊣ listStyle)
                  , [fmt|%T|] ⊳ (s ⊣ alignStyle)
@@ -281,6 +298,7 @@ data FormatSpecifier α = BareOption (Option α)
                        | MaxLen LenSpec (FormatSpecifier α)
                        | ForEachWindow α α
                        | Conditional 𝕋 𝕋 𝕋
+                       -- XXX replace this with Format?
                        | BareText 𝕋
   deriving Show
 
@@ -380,20 +398,20 @@ tests = localOption Never $
       bare_wname         = bareOption WindowName
       ts_ :: [(𝕋,Format SavedDefault)]
       ts_ =
-        let left_style_status :: Style
+        let left_style_status :: Style (FormatSpecifier StyleOption)
             left_style_status = emptyStyle & alignStyle   ⊩ AlignLeft
                                            & rangeStyle   ⊩ RangeLeft
                                            & stylePayload ⊩ status_left_style
-        in  [ ( "#{window_name}", toFormat WindowName )
-            , ( "#{@foobie}", toFormat $ user_foobie )
-            , ( "#{=3:window_name}", toFormat $ len3 bare_wname )
+            toF ∷ ToFormat α => α -> Format SavedDefault
+            toF = noSaveDefault ∘ toFormat
+        in  [ ( "#{window_name}", toF WindowName )
+            , ( "#{@foobie}", toF user_foobie )
+            , ( "#{=3:window_name}", toF $ len3 bare_wname )
             , ( "#{=/#{status-left-length}:window_name}",
-                toFormat $ len_left_length bare_wname )
-            , ( "#{T:@foobie}",
-                toFormat $ ExpandTwice WithStrftime $ bare_foobie )
-            , ( "#{E;=3:@foobie}",
-                -- "#{=3:#{E:@foobie}}" would also work, but is less compact
-                toFormat $ len3 (_E bare_foobie) )
+                toF $ len_left_length bare_wname )
+            , ( "#{T:@foobie}", toF $ ExpandTwice WithStrftime bare_foobie )
+            , ( -- "#{=3:#{E:@foobie}}" would also work, but is less compact
+                "#{E;=3:@foobie}", toF $ len3 (_E bare_foobie) )
 
             {- The ordering of the T and the =1 doesn't matter; the T always
                effects:
@@ -403,89 +421,106 @@ tests = localOption Never $
                > $ tmux display-message -p '#{=/1:#{T:@foobie}}'
                > 2
             -}
-            , ( "#{T;=3:@foobie}", toFormat $ _T $ len3 bare_foobie)
+            , ( "#{T;=3:@foobie}", toF $ _T $ len3 bare_foobie)
 
-            , ( "#{T;=3:@foobie}", toFormat $ len3 $ _T bare_foobie)
+            , ( "#{T;=3:@foobie}", toF $ len3 $ _T bare_foobie)
             , ( "#{=/#{status-left-length}:window_name}",
-                toFormat $ len_left_length bare_wname )
-            , ( "#{E;=3:window_name}", toFormat $ _E $ len3 bare_wname )
+                toF $ len_left_length bare_wname )
+            , ( "#{E;=3:window_name}", toF $ _E $ len3 bare_wname )
             , ( "#[align=left range=left #{E:status-left-style}]"
-              , toFormat left_style_status
+              , toF left_style_status
               )
             , ( ю [ "#[push-default]"
                   , "#{T;=/#{status-left-length}:status-left}"
                   , "#[pop-default]" ]
-              , saveDefault $ toFormat (_T $ len_left_length status_left)
+              , saveDefault (_T $ len_left_length status_left)
               )
             , ( ю [ "#[norange default]"
                   , "#[nolist align=right range=right #{E:status-right-style}]"
                   ]
-              , toFormat [ emptyStyle & rangeStyle   ⊩ RangeNone
-                                      & styleDefault ⊢ StyleDefault
-                         , emptyStyle & listStyle    ⊩ ListNone
-                                      & alignStyle   ⊩ AlignRight
-                                      & rangeStyle   ⊩ RangeRight
-                                      & stylePayload ⊩ status_right_style
-                         ]
+              , toF [ emptyStyle & rangeStyle   ⊩ RangeNone
+                                 & styleDefault ⊢ StyleDefault
+                    , emptyStyle & listStyle    ⊩ ListNone
+                                 & alignStyle   ⊩ AlignRight
+                                 & rangeStyle   ⊩ RangeRight
+                                 & stylePayload ⊩ status_right_style
+                    ]
               )
 
             , ( ю [ "#[push-default]"
                   , "#{T;=/#{status-right-length}:status-right}"
                   , "#[pop-default]"
                   ]
-              , saveDefault $ toFormat (_T $ len_right_length status_right)
+              , saveDefault (_T $ len_right_length status_right)
               )
 
             , ( "#[list=on align=#{status-justify}]"
-              , toFormat (emptyStyle & listStyle ⊩ ListOn
-                                     & alignStyle ⊩ AlignOpt StatusJustify)
+              , toF (emptyStyle @() & listStyle ⊩ ListOn
+                                  & alignStyle ⊩ AlignOpt StatusJustify)
               )
 
             , ( "#[list=left-marker]<"
-              , toFormat $ emptyStyle & listStyle ⊩ ListLeftMarker "<"
+              , toF $ emptyStyle @() & listStyle ⊩ ListLeftMarker "<"
               )
 
             , ( "#[list=right-marker]>"
-              , toFormat $ emptyStyle & listStyle ⊩ ListRightMarker ">"
+              , toF $ emptyStyle @() & listStyle ⊩ ListRightMarker ">"
               )
 
-            , ( "#[list=on]", toFormat (emptyStyle & listStyle ⊩ ListOn) )
+            , ( "#[list=on]", toF (emptyStyle @() & listStyle ⊩ ListOn) )
 
             , ( "#{W:#{status-left},#{status-right}}",
-                toFormat (ForEachWindow status_left status_right)
+                toF (ForEachWindow status_left status_right)
               )
 
             , ( "#{W:#[list=on],#[list=focus]}",
-                toFormat (ForEachWindow (emptyStyle & listStyle ⊩ ListOn) (emptyStyle & listStyle ⊩ ListFocus))
+                toF (ForEachWindow (emptyStyle @() & listStyle ⊩ ListOn)
+                                   (emptyStyle @() & listStyle ⊩ ListFocus))
               )
-
             , ("#{?window_end_flag,,#{window-status-separator}}"
-              , toFormat @(FormatSpecifier 𝕋)
-                  (conditional WindowEndFlag (StringOptionText "")
-                                             (bareOption WindowStatusSeparator))
+              , toF @(FormatSpecifier 𝕋)
+                  (conditional @()
+                   WindowEndFlag () (bareOption WindowStatusSeparator))
+              )
+            , ( "#[push-default]#{T:window-status-format}#[pop-default]"
+              , saveDefault (_T (bareOption WindowStatusFormat))
+              )
+            , ( "#[range=window|#{window_index} foo]"
+              , toF (emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
+                                & stylePayload ⊩ (StyleText "foo"))
               )
 
             , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                   ]
-              , toFormat [ toText ∘ toFormat $
-                             emptyStyle & listStyle ⊩ ListOn
+              , let toT :: ToFormat α => α -> 𝕋
+                    toT = toText ∘ toFormat
+                    toT_ = toT @(FormatSpecifier 𝕋)
+                    bareT = toT ∘ BareText @𝕋
+                in  toF [ toText ∘ toFormat $
+                             emptyStyle @() & listStyle ⊩ ListOn
                                         & alignStyle ⊩ AlignOpt StatusJustify
                          , toText ∘ toFormat $
-                             emptyStyle & listStyle ⊩ ListLeftMarker "<"
+                             emptyStyle @() & listStyle ⊩ ListLeftMarker "<"
                          , toText ∘ toFormat $
-                             emptyStyle & listStyle ⊩ ListRightMarker ">"
+                             emptyStyle @() & listStyle ⊩ ListRightMarker ">"
                          , "#[list=on]"
                          , toText ∘ toFormat $
                              ForEachWindow @(FormatSpecifier 𝕋)
                                (BareText $
-                                 (toText ∘ toFormat $ BareText @𝕋 "#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]")
-                                ◇ "#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}}")
+                                 (bareT "#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]")
+                                ◇ toText (saveDefault (_T $ bareOption WindowStatusFormat))
+                                ◇ toT (emptyStyle @() & rangeStyle   ⊩ RangeNone
+                                                      & styleDefault ⊢ StyleDefault)
+                                ◇ toT_ (conditional WindowEndFlag
+                                                   (StringOptionText "")
+                                                   (bareOption WindowStatusSeparator))
+
+                               )
                                (BareText "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}")
                          ]
               )
-
             ]
-      do_test :: (𝕋, Format SavedDefault) → TestTree
+      do_test :: (𝕋, Format α) → TestTree
       do_test (t,x) = let tname = if T.length t > 60
                                   then T.unpack (T.take 60 t) ◇ "…"
                                   else T.unpack t
