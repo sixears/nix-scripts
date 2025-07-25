@@ -503,7 +503,8 @@ tests = localOption Never $
                              emptyStyle @() & listStyle ⊩ ListLeftMarker "<"
                          , toText ∘ toFormat $
                              emptyStyle @() & listStyle ⊩ ListRightMarker ">"
-                         , "#[list=on]"
+                         , toText ∘ toFormat $
+                             emptyStyle @() & listStyle ⊩ ListOn
                          , toText ∘ toFormat $
                              ForEachWindow @(FormatSpecifier 𝕋)
                                (BareText $
