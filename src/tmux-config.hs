@@ -80,12 +80,15 @@ noSaveDefault = Format ∘ unFormat
 
 ------------------------------------------------------------
 
-data StyleOption = StatusLeftStyle | StatusRightStyle | StyleText 𝕋 deriving Show
+data StyleOption = StatusLeftStyle | StatusRightStyle | StyleText 𝕋
+                 | WindowStatusStyle
+  deriving Show
 
 instance Printable StyleOption where
-  print StatusLeftStyle  = P.text "status-left-style"
-  print StatusRightStyle = P.text "status-right-style"
-  print (StyleText t)    = P.text t
+  print StatusLeftStyle   = P.text "status-left-style"
+  print StatusRightStyle  = P.text "status-right-style"
+  print (StyleText t)     = P.text t
+  print WindowStatusStyle = P.text "window-status-style"
 
 instance ToFormat StyleOption where
   toFormat o = Format $ [fmt|%T|] o
@@ -508,7 +511,8 @@ tests = localOption Never $
                          , toText ∘ toFormat $
                              ForEachWindow @(FormatSpecifier 𝕋)
                                (BareText $
-                                 (toText ∘ toFormat $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & stylePayload ⊩ StyleText "#{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}")
+
+                                 (toText ∘ toFormat $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & stylePayload ⊩ StyleText(toT (ExpandTwice WithoutStrftime (bareOption WindowStatusStyle)) ◇ "#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}"))
                                 ◇ toText (saveDefault (_T $ bareOption WindowStatusFormat))
                                 ◇ toT (emptyStyle @() & rangeStyle   ⊩ RangeNone
                                                       & styleDefault ⊢ StyleDefault)
