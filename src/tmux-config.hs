@@ -159,20 +159,30 @@ data StringVariable = Unused deriving Show
 
 ------------------------------------------------------------
 
-newtype Variable = BoolVar BooleanVariable
-  deriving (Printable, Show)
+data Variable = BoolVar BooleanVariable | StyleVar StyleVariable  deriving Show
+
+instance Printable Variable where
+  print (BoolVar  bv) = print bv
+  print (StyleVar sv) = print sv
 
 instance ToFormat Variable where
   toFormat (BoolVar bv) = Format $ [fmt|#{%T}|] bv
 
 ------------------------------------------------------------
 
-data StringExpr = SVar StringVariable | StyVar StyleVariable  deriving Show
+data StringExpr = SVar StringVariable | StyExp StyleExpr
+                | StrTxt 𝕋
+  deriving Show
+
+instance ToFormat StringExpr where
+  toFormat (StrTxt t)  = Format t
+  toFormat (StyExp sx) = toFormat sx
+  toFormat sx = Format $ "StringExpr: [" ◇ T.pack (show sx) ◇ "]"
 
 ------------------------------------------------------------
 
 data BoolExpr = BVar BooleanVariable | And BoolExpr BoolExpr
-              | StyNotEq StyleExpr StyleExpr
+              | StrNotEq StringExpr StringExpr
   deriving Show
 
 instance Printable BoolExpr where
@@ -189,7 +199,7 @@ instance ToFormat BoolExpr where
     -- testing shows that &&: doesn't work with raw var names,
     -- we always need a #{..} form
     Format $ [fmt|#{&&:%T,%T}|] (qualify x) (qualify y)
-  toFormat (StyNotEq x y) = Format $ [fmt|{!=:%T,%T}|] (toFormat x) (toFormat y)
+  toFormat (StrNotEq x y) = Format $ [fmt|{!=:%T,%T}|] (toFormat x) (toFormat y)
 
 ------------------------------------------------------------
 
@@ -342,6 +352,7 @@ instance Printable WithStrftime where
 --------------------
 
 data FormatSpecifier α = BareOption (Option α)
+                       | BareVariable Variable
                        | ExpandTwice WithStrftime (FormatSpecifier α)
                        | MaxLen LenSpec (FormatSpecifier α)
                        | ForEachWindow α α
@@ -366,6 +377,7 @@ stackRank _                 = 0
 
 innerFormatSpecifier :: FormatSpecifier α → 𝕄 (FormatSpecifier α)
 innerFormatSpecifier (BareOption    _)      = 𝓝
+innerFormatSpecifier (BareVariable  _)      = 𝓝
 innerFormatSpecifier (MaxLen        _  fs)  = 𝓙 fs
 innerFormatSpecifier (ExpandTwice   _  fs)  = 𝓙 fs
 innerFormatSpecifier (ForEachWindow _ _)    = 𝓝
@@ -375,7 +387,8 @@ innerFormatSpecifier (BareText      _)      = 𝓝
 --------------------
 
 instance (Show α, ToFormat α, Printable α) => Printable (FormatSpecifier α) where
-  print (BareOption  t)            = print t
+  print (BareOption   t)           = print t
+  print (BareVariable t)           = print t
   print (ExpandTwice w_strftime _) = P.text $ [fmt|%T|] w_strftime
   print (MaxLen      len_spec   _) = P.text $ [fmt|%T|] len_spec
   print (ForEachWindow other current) =
@@ -541,7 +554,7 @@ tests = localOption Never $
                                   , "{!=:#{E:window-status-last-style}"
                                   , "default}}"
                                   ]
-              , toF (And (BVar WindowLastFlag) (StyNotEq (StyleExp WindowStatusLastStyle) DefaultStyle))
+              , toF (And (BVar WindowLastFlag) (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ ExpandTwice WithoutStrftime $ BareVariable $ StyleVar WindowStatusLastStyle) (StyExp DefaultStyle)))
               )
             , ( "#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}"
               , toF (emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
