@@ -199,7 +199,7 @@ instance ToFormat BoolExpr where
     -- testing shows that &&: doesn't work with raw var names,
     -- we always need a #{..} form
     Format $ [fmt|#{&&:%T,%T}|] (qualify x) (qualify y)
-  toFormat (StrNotEq x y) = Format $ [fmt|{!=:%T,%T}|] (toFormat x) (toFormat y)
+  toFormat (StrNotEq x y) = Format $ [fmt|#{!=:%T,%T}|] (toFormat x) (toFormat y)
 
 ------------------------------------------------------------
 
@@ -364,7 +364,8 @@ data FormatSpecifier α = BareOption (Option α)
 ----------------------------------------
 
 conditional :: (ToFormat β, ToFormat γ) => BoolExpr → β → γ → FormatSpecifier α
-conditional a b c = Conditional (toText $ toFormat a) (toText $ toFormat b) (toText $ toFormat c)
+conditional a b c =
+  Conditional (toText $ toFormat a) (toText $ toFormat b) (toText $ toFormat c)
 
 ----------------------------------------
 
@@ -551,14 +552,32 @@ tests = localOption Never $
               )
 
             , ( T.intercalate "," [ "#{&&:#{window_last_flag}"
-                                  , "{!=:#{E:window-status-last-style}"
+                                  , "#{!=:#{E:window-status-last-style}"
                                   , "default}}"
                                   ]
-              , toF (And (BVar WindowLastFlag) (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ ExpandTwice WithoutStrftime $ BareVariable $ StyleVar WindowStatusLastStyle) (StyExp DefaultStyle)))
+              , let toF_SV = toText ∘ toFormat @(FormatSpecifier StyleVariable)
+                    win_stat_last =
+                      BareVariable $ StyleVar WindowStatusLastStyle
+                in  toF (And (BVar WindowLastFlag)
+                             (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
+                                       (StyExp DefaultStyle)))
               )
-            , ( "#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}"
-              , toF (emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
-                                & stylePayload ⊩ (StyleText "foo"))
+            , ( T.intercalate "," [ "#{?#{&&:#{window_last_flag}"
+                                  , "#{!=:#{E:window-status-last-style}"
+                                  , "default}}"
+                                  , "#{E:window-status-last-style}"
+                                  , "}"
+                                  ]
+              , let toF_SV = toText ∘ toFormat @(FormatSpecifier StyleVariable)
+                    win_stat_last ∷ FormatSpecifier StyleVariable
+                    win_stat_last =
+                      BareVariable $ StyleVar WindowStatusLastStyle
+                    win_last_style =
+                      And (BVar WindowLastFlag)
+                          (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
+                                    (StyExp DefaultStyle))
+                in  toF @(FormatSpecifier 𝕋) $
+                      conditional (win_last_style∷BoolExpr) (_E win_stat_last) ()
               )
 
             , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
