@@ -80,18 +80,27 @@ noSaveDefault = Format ∘ unFormat
 
 ------------------------------------------------------------
 
-data StyleOption = StatusLeftStyle | StatusRightStyle | StyleText 𝕋
-                 | WindowStatusStyle
+data StyleVariable = StatusLeftStyle | StatusRightStyle | StyleText 𝕋
+                   | WindowStatusStyle | WindowStatusLastStyle
   deriving Show
 
-instance Printable StyleOption where
-  print StatusLeftStyle   = P.text "status-left-style"
-  print StatusRightStyle  = P.text "status-right-style"
-  print (StyleText t)     = P.text t
-  print WindowStatusStyle = P.text "window-status-style"
+instance Printable StyleVariable where
+  print StatusLeftStyle       = P.text "status-left-style"
+  print StatusRightStyle      = P.text "status-right-style"
+  print (StyleText t)         = P.text t
+  print WindowStatusStyle     = P.text "window-status-style"
+  print WindowStatusLastStyle = P.text "window-status-last-style"
 
-instance ToFormat StyleOption where
+instance ToFormat StyleVariable where
   toFormat o = Format $ [fmt|%T|] o
+
+------------------------------------------------------------
+
+data StyleExpr = DefaultStyle | StyleExp StyleVariable  deriving Show
+
+instance ToFormat StyleExpr where
+  toFormat DefaultStyle = Format "default"
+  toFormat (StyleExp se) = toFormat se
 
 ------------------------------------------------------------
 
@@ -138,13 +147,49 @@ instance Printable FormatVariable where
 
 ------------------------------------------------------------
 
-data BoolOption = WindowEndFlag deriving Show
+data BooleanVariable = WindowEndFlag | WindowLastFlag deriving Show
 
-instance Printable BoolOption where
-  print WindowEndFlag = P.string $ show WindowEndFlag
+instance Printable BooleanVariable where
+  print WindowEndFlag  = P.text "window_end_flag"
+  print WindowLastFlag = P.text "window_last_flag"
 
-instance ToFormat BoolOption where
-  toFormat WindowEndFlag = Format "window_end_flag"
+------------------------------------------------------------
+
+data StringVariable = Unused deriving Show
+
+------------------------------------------------------------
+
+newtype Variable = BoolVar BooleanVariable
+  deriving (Printable, Show)
+
+instance ToFormat Variable where
+  toFormat (BoolVar bv) = Format $ [fmt|#{%T}|] bv
+
+------------------------------------------------------------
+
+data StringExpr = SVar StringVariable | StyVar StyleVariable  deriving Show
+
+------------------------------------------------------------
+
+data BoolExpr = BVar BooleanVariable | And BoolExpr BoolExpr
+              | StyNotEq StyleExpr StyleExpr
+  deriving Show
+
+instance Printable BoolExpr where
+  print (BVar bo) = print bo
+  print x         = P.string $ show x
+
+qualify ∷ BoolExpr → Format UnsavedDefault
+qualify (BVar bo) = Format $ [fmt|#{%T}|] bo
+qualify bx        = toFormat bx
+
+instance ToFormat BoolExpr where
+  toFormat (BVar bo) = Format $ [fmt|%T|] bo
+  toFormat (And x y) =
+    -- testing shows that &&: doesn't work with raw var names,
+    -- we always need a #{..} form
+    Format $ [fmt|#{&&:%T,%T}|] (qualify x) (qualify y)
+  toFormat (StyNotEq x y) = Format $ [fmt|{!=:%T,%T}|] (toFormat x) (toFormat y)
 
 ------------------------------------------------------------
 
@@ -307,7 +352,7 @@ data FormatSpecifier α = BareOption (Option α)
 
 ----------------------------------------
 
-conditional :: (ToFormat β, ToFormat γ) => BoolOption → β → γ → FormatSpecifier α
+conditional :: (ToFormat β, ToFormat γ) => BoolExpr → β → γ → FormatSpecifier α
 conditional a b c = Conditional (toText $ toFormat a) (toText $ toFormat b) (toText $ toFormat c)
 
 ----------------------------------------
@@ -337,7 +382,7 @@ instance (Show α, ToFormat α, Printable α) => Printable (FormatSpecifier α) 
     P.text $ [fmt|W:%T,%T|] (toFormat other) (toFormat current)
   print (Conditional condition ifthen ifelse) =
     P.text $ [fmt|?%T,%T,%T|]
-                 (toFormat condition) (toFormat ifthen) (toFormat ifelse)
+                 condition (toFormat ifthen) (toFormat ifelse)
   print (BareText  t)              = print $ "ZZZ" ◇ t
 
 --------------------
@@ -385,9 +430,9 @@ tests = localOption Never $
       len_left_length    = MaxLen $ OptLen StatusLeftLength
       len_right_length   ∷ FormatSpecifier α → FormatSpecifier α
       len_right_length   = MaxLen $ OptLen StatusRightLength
-      status_left_style  ∷ FormatSpecifier StyleOption
+      status_left_style  ∷ FormatSpecifier StyleVariable
       status_left_style  = _E $ bareOption StatusLeftStyle
-      status_right_style ∷ FormatSpecifier StyleOption
+      status_right_style ∷ FormatSpecifier StyleVariable
       status_right_style = _E $ bareOption StatusRightStyle
       status_left        ∷ FormatSpecifier FormatOption
       status_left        = bareOption StatusLeft
@@ -401,7 +446,7 @@ tests = localOption Never $
       bare_wname         = bareOption WindowName
       ts_ :: [(𝕋,Format SavedDefault)]
       ts_ =
-        let left_style_status :: Style (FormatSpecifier StyleOption)
+        let left_style_status :: Style (FormatSpecifier StyleVariable)
             left_style_status = emptyStyle & alignStyle   ⊩ AlignLeft
                                            & rangeStyle   ⊩ RangeLeft
                                            & stylePayload ⊩ status_left_style
@@ -475,7 +520,6 @@ tests = localOption Never $
             , ( "#{W:#{status-left},#{status-right}}",
                 toF (ForEachWindow status_left status_right)
               )
-
             , ( "#{W:#[list=on],#[list=focus]}",
                 toF (ForEachWindow (emptyStyle @() & listStyle ⊩ ListOn)
                                    (emptyStyle @() & listStyle ⊩ ListFocus))
@@ -483,12 +527,23 @@ tests = localOption Never $
             , ("#{?window_end_flag,,#{window-status-separator}}"
               , toF @(FormatSpecifier 𝕋)
                   (conditional @()
-                   WindowEndFlag () (bareOption WindowStatusSeparator))
+                   (BVar WindowEndFlag) () (bareOption WindowStatusSeparator))
               )
             , ( "#[push-default]#{T:window-status-format}#[pop-default]"
               , saveDefault (_T (bareOption WindowStatusFormat))
               )
             , ( "#[range=window|#{window_index} foo]"
+              , toF (emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
+                                & stylePayload ⊩ (StyleText "foo"))
+              )
+
+            , ( T.intercalate "," [ "#{&&:#{window_last_flag}"
+                                  , "{!=:#{E:window-status-last-style}"
+                                  , "default}}"
+                                  ]
+              , toF (And (BVar WindowLastFlag) (StyNotEq (StyleExp WindowStatusLastStyle) DefaultStyle))
+              )
+            , ( "#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}"
               , toF (emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
                                 & stylePayload ⊩ (StyleText "foo"))
               )
@@ -516,7 +571,7 @@ tests = localOption Never $
                                 ◇ toText (saveDefault (_T $ bareOption WindowStatusFormat))
                                 ◇ toT (emptyStyle @() & rangeStyle   ⊩ RangeNone
                                                       & styleDefault ⊢ StyleDefault)
-                                ◇ toT_ (conditional WindowEndFlag
+                                ◇ toT_ (conditional (BVar WindowEndFlag)
                                                    (StringOptionText "")
                                                    (bareOption WindowStatusSeparator))
 
