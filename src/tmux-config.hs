@@ -577,15 +577,25 @@ tests = localOption Never $
                           (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
                                     (StyExp DefaultStyle))
                 in  toF @(FormatSpecifier 𝕋) $
-                      conditional (win_last_style∷BoolExpr) (_E win_stat_last) ()
+                      conditional (win_last_style∷BoolExpr)
+                                  (_E win_stat_last) ()
               )
 
-            , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
+            , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                   ]
               , let toT :: ToFormat α => α -> 𝕋
                     toT = toText ∘ toFormat
                     toT_ = toT @(FormatSpecifier 𝕋)
                     bareT = toT ∘ BareText @𝕋
+                    toF_SV ∷ FormatSpecifier StyleVariable → 𝕋
+                    toF_SV = toText ∘ toFormat @(FormatSpecifier StyleVariable)
+                    win_stat_last ∷ FormatSpecifier StyleVariable
+                    win_stat_last =
+                      BareVariable $ StyleVar WindowStatusLastStyle
+                    win_last_style =
+                      And (BVar WindowLastFlag)
+                          (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
+                                    (StyExp DefaultStyle))
                 in  toF [ toText ∘ toFormat $
                              emptyStyle @() & listStyle ⊩ ListOn
                                         & alignStyle ⊩ AlignOpt StatusJustify
@@ -595,11 +605,22 @@ tests = localOption Never $
                              emptyStyle @() & listStyle ⊩ ListRightMarker ">"
                          , toText ∘ toFormat $
                              emptyStyle @() & listStyle ⊩ ListOn
+
                          , toText ∘ toFormat $
                              ForEachWindow @(FormatSpecifier 𝕋)
                                (BareText $
 
-                                 (toText ∘ toFormat $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & stylePayload ⊩ StyleText(toT (ExpandTwice WithoutStrftime (bareOption WindowStatusStyle)) ◇ "#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}"))
+                                 (toText ∘ toFormat $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & stylePayload ⊩ StyleText(toT (ExpandTwice WithoutStrftime (bareOption WindowStatusStyle)) ◇
+
+                           toText (
+                             toF @(FormatSpecifier 𝕋) $
+                               conditional (win_last_style∷BoolExpr)
+                                           (_E win_stat_last) ())
+
+
+
+--                                                   "#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}"
+                                                                                                                                   ◇ "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}"))
                                 ◇ toText (saveDefault (_T $ bareOption WindowStatusFormat))
                                 ◇ toT (emptyStyle @() & rangeStyle   ⊩ RangeNone
                                                       & styleDefault ⊢ StyleDefault)
