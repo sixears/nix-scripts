@@ -147,11 +147,15 @@ instance Printable FormatVariable where
 
 ------------------------------------------------------------
 
-data BooleanVariable = WindowEndFlag | WindowLastFlag deriving Show
+data BooleanVariable = WindowEndFlag | WindowLastFlag | WindowActivityFlag
+                     | WindowSilenceFlag
+  deriving Show
 
 instance Printable BooleanVariable where
-  print WindowEndFlag  = P.text "window_end_flag"
-  print WindowLastFlag = P.text "window_last_flag"
+  print WindowEndFlag      = P.text "window_end_flag"
+  print WindowLastFlag     = P.text "window_last_flag"
+  print WindowActivityFlag = P.text "window_activity_flag"
+  print WindowSilenceFlag  = P.text "window_silence_flag"
 
 ------------------------------------------------------------
 
@@ -182,7 +186,7 @@ instance ToFormat StringExpr where
 ------------------------------------------------------------
 
 data BoolExpr = BVar BooleanVariable | And BoolExpr BoolExpr
-              | StrNotEq StringExpr StringExpr
+              | Or BoolExpr BoolExpr | StrNotEq StringExpr StringExpr
   deriving Show
 
 instance Printable BoolExpr where
@@ -199,6 +203,8 @@ instance ToFormat BoolExpr where
     -- testing shows that &&: doesn't work with raw var names,
     -- we always need a #{..} form
     Format $ [fmt|#{&&:%T,%T}|] (qualify x) (qualify y)
+  toFormat (Or x y) =
+    Format $ [fmt|#{||:%T,%T}|] (qualify x) (qualify y)
   toFormat (StrNotEq x y) = Format $ [fmt|#{!=:%T,%T}|] (toFormat x) (toFormat y)
 
 ------------------------------------------------------------
@@ -581,6 +587,19 @@ tests = localOption Never $
                                   (_E win_stat_last) ()
               )
 
+            , ( "#{||:#{window_activity_flag},#{window_silence_flag}}"
+              , toF $ Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag)
+              )
+
+            , ( "#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}"
+              , let toF_SV = toText ∘ toFormat @(FormatSpecifier StyleVariable)
+                    win_stat_last =
+                      BareVariable $ StyleVar WindowStatusLastStyle
+                in  toF (And (BVar WindowLastFlag)
+                             (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
+                                       (StyExp DefaultStyle)))
+              )
+
             , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                   ]
               , let toT :: ToFormat α => α -> 𝕋
@@ -616,11 +635,7 @@ tests = localOption Never $
                              toF @(FormatSpecifier 𝕋) $
                                conditional (win_last_style∷BoolExpr)
                                            (_E win_stat_last) ())
-
-
-
---                                                   "#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}"
-                                                                                                                                   ◇ "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}"))
+                                ◇ "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}"))
                                 ◇ toText (saveDefault (_T $ bareOption WindowStatusFormat))
                                 ◇ toT (emptyStyle @() & rangeStyle   ⊩ RangeNone
                                                       & styleDefault ⊢ StyleDefault)
