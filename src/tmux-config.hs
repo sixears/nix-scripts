@@ -595,15 +595,34 @@ tests = localOption Never $
               , toF $ Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag)
               )
 
-            , ( "#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}"
+            , ( T.intercalate ","
+                [ "#{&&:#{||:#{window_activity_flag},#{window_silence_flag}}"
+                , "#{!=:#{E:window-status-activity-style}"
+                , "default}}" ]
               , toF $
                   And (Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag))
                       (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ _E $ BareVariable $ StyleVar WindowStatusActivityStyle)
                                 (StyExp DefaultStyle))
               )
 
-            , ( "#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}"
-              , toF $ Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag)
+            , let ç    = T.intercalate ","
+                  toT  ∷ ToFormat α => α -> 𝕋
+                  toT  = toText ∘ toFormat
+                  toT_ = toT @(FormatSpecifier 𝕋)
+              in  (ç [ ç [ "#{?#{&&:#{||:#{window_activity_flag}"
+                          , "#{window_silence_flag}}"
+                          , ç ["#{!=:#{E:window-status-activity-style}"
+                              , "default}}" ]
+                          ]
+                      , "#{E:window-status-activity-style}"
+                      , "}"
+                      ]
+              , Format $ toT_ $
+                  conditional @(FormatSpecifier 𝕋)
+                    (And (Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag))
+                         (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ _E $ BareVariable $ StyleVar WindowStatusActivityStyle)
+                                   (StyExp DefaultStyle)))
+                                   (_E $ BareVariable $ StyleVar WindowStatusActivityStyle)()
               )
 
             , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
