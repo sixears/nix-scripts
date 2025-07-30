@@ -114,20 +114,20 @@ instance ToFormat StyleExpr where
 {-| A user-option, which should begin with a '@'.  In a better world,
     we would check that at construction time.  We could use quasi-quoting,
     but that requires a separate file due to staging restrictions. -}
-newtype UserOption = UserOption 𝕋
+newtype UserVariable = UserVariable 𝕋
 
-instance Show UserOption where
-  show (UserOption t) = "UserOption: '" ◇ T.unpack t ◇ "'"
+instance Show UserVariable where
+  show (UserVariable t) = "UserVariable: '" ◇ T.unpack t ◇ "'"
 
-instance Printable UserOption where
-  print (UserOption t) = P.text t
+instance Printable UserVariable where
+  print (UserVariable t) = P.text t
 
-instance ToFormat UserOption where
+instance ToFormat UserVariable where
   toFormat o = Format $ [fmt|#{%T}|] o
 
-userOption ∷ 𝕋 → UserOption
+userOption ∷ 𝕋 → UserVariable
 userOption   (T.uncons → 𝓝)          = error "userOption: empty text"
-userOption t@(T.uncons → 𝓙 ('@', _)) = UserOption t
+userOption t@(T.uncons → 𝓙 ('@', _)) = UserVariable t
 userOption t                         = error $ "userOption: '" ◇ T.unpack t ◇ "'"
 
 ------------------------------------------------------------
@@ -437,7 +437,7 @@ main :: IO ()
 main = do
   say $ toFormat (emptyStyle & alignStyle   ⊩ AlignLeft
                              & rangeStyle   ⊩ RangeLeft
-                             & stylePayload ⊩ ExpandTwice WithoutStrftime (bareOption StatusLeftStyle)
+                             & stylePayload ⊩ ExpandTwice @(FormatSpecifier StyleVariable) WithoutStrftime (BareVariable $ StyleVar StatusLeftStyle)
                  )
 
 --------------------------------------------------------------------------------
@@ -463,10 +463,10 @@ tests = localOption Never $
       status_left        ∷ FormatSpecifier FormatVariable
       status_left        = BareVariable $ FormatVar StatusLeft
       status_right       ∷ FormatSpecifier FormatVariable
-      status_right       = bareOption StatusRight
-      user_foobie        ∷ UserOption
+      status_right       = BareVariable $ FormatVar StatusRight
+      user_foobie        ∷ UserVariable
       user_foobie        = userOption "@foobie"
-      bare_foobie        ∷ FormatSpecifier UserOption
+      bare_foobie        ∷ FormatSpecifier UserVariable
       bare_foobie        = bareOption user_foobie
       bare_wname         ∷ FormatSpecifier FormatVariable
       bare_wname         = bareOption WindowName
