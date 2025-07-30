@@ -179,6 +179,7 @@ instance Printable Variable where
 
 instance ToFormat Variable where
   toFormat (BoolVar bv) = Format $ [fmt|#{%T}|] bv
+  toFormat (StyleVar sv) = Format $ [fmt|toFormat StyleVar %w|] sv
 
 ------------------------------------------------------------
 
@@ -613,9 +614,6 @@ tests = localOption Never $
               )
 
             , let ç    = T.intercalate ","
-                  toT  ∷ ToFormat α => α -> 𝕋
-                  toT  = toText ∘ toFormat
-                  toT_ = toT @(FormatSpecifier 𝕋)
               in  (ç [ ç [ "#{?#{&&:#{||:#{window_activity_flag}"
                           , "#{window_silence_flag}}"
                           , ç ["#{!=:#{E:window-status-activity-style}"
@@ -634,36 +632,35 @@ tests = localOption Never $
 
             , ( "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
               , let xx_ ∷ FormatSpecifier 𝕋 =
-                      (conditional @(FormatSpecifier 𝕋)
-                         (And (Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag))
-                              (StrNotEq
-                                 (StrTxt $
-                                    toText ∘ toFormat @(FormatSpecifier StyleVariable) $
-                                      _E $ BareVariable $ StyleVar WindowStatusActivityStyle)
-                                 (StyExp DefaultStyle))
+                      conditional @(FormatSpecifier 𝕋)
+                        (And (Or (BVar WindowActivityFlag)
+                                 (BVar WindowSilenceFlag))
+                             (StrNotEq
+                                (StrTxt $
+                                   toText ∘ toFormat @(FormatSpecifier StyleVariable) $
+                                     _E $ BareVariable $
+                                       StyleVar WindowStatusActivityStyle)
+                                (StyExp DefaultStyle))
                          )
                          (_E $ BareVariable $
                             StyleVar WindowStatusActivityStyle)
                          ()
-                      )
-                in -- "#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}"
-                  toF @(FormatSpecifier 𝕋) $ conditional @(FormatSpecifier 𝕋)
-                   (let win_stat_bell =
-                         BareVariable $ StyleVar WindowStatusBellStyle
-                    in  {- toF -} (And (BVar WindowBellFlag)
+
+                in toF @(FormatSpecifier 𝕋) $
+                     conditional @(FormatSpecifier 𝕋)
+                       (let win_stat_bell =
+                              BareVariable $ StyleVar WindowStatusBellStyle
+                        in  And (BVar WindowBellFlag)
                                 (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_bell)
-                                          (StyExp DefaultStyle))))
-                    -- "#{E:window-status-bell-style}"
-                    (_E $ BareVariable $ StyleVar WindowStatusBellStyle)
-                    -- "#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}"
-                    xx_
+                                          (StyExp DefaultStyle)))
+                       (_E $ BareVariable $ StyleVar WindowStatusBellStyle)
+                       xx_
 
               )
 
             , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                   ]
-              , let bareT = toT ∘ BareText @𝕋
-                    win_stat_last ∷ FormatSpecifier StyleVariable
+              , let win_stat_last ∷ FormatSpecifier StyleVariable
                     win_stat_last =
                       BareVariable $ StyleVar WindowStatusLastStyle
                     win_last_style =
