@@ -640,6 +640,15 @@ tests = localOption Never $
                       And (BVar WindowLastFlag)
                           (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
                                     (StyExp DefaultStyle))
+                    text_to_style =
+                      ю [ toT (ExpandTwice WithoutStrftime
+                                           (bareOption WindowStatusStyle))
+                        , toText $
+                            toF @(FormatSpecifier 𝕋) $
+                              conditional (win_last_style∷BoolExpr)
+                                          (_E win_stat_last) ()
+                        , "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}" ]
+
                 in  toF [ toText ∘ toFormat $
                              emptyStyle @() & listStyle ⊩ ListOn
                                         & alignStyle ⊩ AlignOpt StatusJustify
@@ -652,22 +661,15 @@ tests = localOption Never $
 
                          , toText ∘ toFormat $
                              ForEachWindow @(FormatSpecifier 𝕋)
-                               (BareText $
-
-                                 (toText ∘ toFormat $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & stylePayload ⊩ StyleText(toT (ExpandTwice WithoutStrftime (bareOption WindowStatusStyle)) ◇
-
-                           toText (
-                             toF @(FormatSpecifier 𝕋) $
-                               conditional (win_last_style∷BoolExpr)
-                                           (_E win_stat_last) ())
-                                ◇ "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}"))
-                                ◇ toText (saveDefault (_T $ bareOption WindowStatusFormat))
-                                ◇ toT (emptyStyle @() & rangeStyle   ⊩ RangeNone
+                               (BareText $ ю
+                                [ toText ∘ toFormat $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & stylePayload ⊩ StyleText(text_to_style)
+                                , toText (saveDefault (_T $ bareOption WindowStatusFormat))
+                                , toT (emptyStyle @() & rangeStyle   ⊩ RangeNone
                                                       & styleDefault ⊢ StyleDefault)
-                                ◇ toT_ (conditional (BVar WindowEndFlag)
+                                , toT_ (conditional (BVar WindowEndFlag)
                                                    (StringOptionText "")
                                                    (bareOption WindowStatusSeparator))
-
+                                 ]
                                )
                                (BareText "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}")
                          ]
