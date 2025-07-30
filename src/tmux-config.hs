@@ -132,25 +132,17 @@ userOption t                         = error $ "userOption: '" ◇ T.unpack t �
 
 ------------------------------------------------------------
 
-data FormatOption = StatusLeft | StatusRight | WindowStatusFormat deriving Show
+data FormatVariable = StatusLeft | StatusRight | WindowStatusFormat | WindowName
+  deriving Show
 
-instance Printable FormatOption where
+instance Printable FormatVariable where
   print StatusLeft         = P.text "status-left"
   print StatusRight        = P.text "status-right"
   print WindowStatusFormat = P.text "window-status-format"
-
-instance ToFormat FormatOption where
-  toFormat o = Format $ [fmt|#{%T}|] o
-
-------------------------------------------------------------
-
-data FormatVariable = WindowName deriving Show
+  print WindowName         = P.text "window_name"
 
 instance ToFormat FormatVariable where
-  toFormat WindowName = Format "#{window_name}"
-
-instance Printable FormatVariable where
-  print WindowName = P.text "window_name"
+  toFormat o = Format $ [fmt|#{%T}|] o
 
 ------------------------------------------------------------
 
@@ -171,15 +163,19 @@ data StringVariable = Unused deriving Show
 
 ------------------------------------------------------------
 
-data Variable = BoolVar BooleanVariable | StyleVar StyleVariable  deriving Show
+data Variable = BoolVar BooleanVariable | FormatVar FormatVariable
+              | StyleVar StyleVariable
+  deriving Show
 
 instance Printable Variable where
-  print (BoolVar  bv) = print bv
-  print (StyleVar sv) = print sv
+  print (BoolVar   bv) = print bv
+  print (FormatVar fv) = print fv
+  print (StyleVar  sv) = print sv
 
 instance ToFormat Variable where
-  toFormat (BoolVar bv) = Format $ [fmt|#{%T}|] bv
-  toFormat (StyleVar sv) = Format $ [fmt|toFormat StyleVar %w|] sv
+  toFormat (BoolVar   bv) = Format $ [fmt|#{%T}|] bv
+  toFormat (FormatVar fv) = Format $ [fmt|#{%T}|] fv
+  toFormat (StyleVar  sv) = Format $ [fmt|toFormat StyleVar %w|] sv
 
 ------------------------------------------------------------
 
@@ -366,6 +362,7 @@ instance Printable WithStrftime where
 
 --------------------
 
+{- A format specifier is a #{…} group -}
 data FormatSpecifier α = BareOption (Option α)
                        | BareVariable Variable
                        | ExpandTwice WithStrftime (FormatSpecifier α)
@@ -460,12 +457,12 @@ tests = localOption Never $
       len_right_length   ∷ FormatSpecifier α → FormatSpecifier α
       len_right_length   = MaxLen $ OptLen StatusRightLength
       status_left_style  ∷ FormatSpecifier StyleVariable
-      status_left_style  = _E $ bareOption StatusLeftStyle
+      status_left_style  = _E $ BareVariable $ StyleVar StatusLeftStyle
       status_right_style ∷ FormatSpecifier StyleVariable
-      status_right_style = _E $ bareOption StatusRightStyle
-      status_left        ∷ FormatSpecifier FormatOption
-      status_left        = bareOption StatusLeft
-      status_right       ∷ FormatSpecifier FormatOption
+      status_right_style = _E $ BareVariable $ StyleVar StatusRightStyle
+      status_left        ∷ FormatSpecifier FormatVariable
+      status_left        = BareVariable $ FormatVar StatusLeft
+      status_right       ∷ FormatSpecifier FormatVariable
       status_right       = bareOption StatusRight
       user_foobie        ∷ UserOption
       user_foobie        = userOption "@foobie"
