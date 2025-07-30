@@ -629,7 +629,6 @@ tests = localOption Never $
                                    (StyExp DefaultStyle)))
                                    (_E $ BareVariable $ StyleVar WindowStatusActivityStyle)()
               )
-
             , ( "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
               , let xx_ ∷ FormatSpecifier 𝕋 =
                       conditional @(FormatSpecifier 𝕋)
@@ -655,7 +654,6 @@ tests = localOption Never $
                                           (StyExp DefaultStyle)))
                        (_E $ BareVariable $ StyleVar WindowStatusBellStyle)
                        xx_
-
               )
 
             , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
@@ -674,7 +672,30 @@ tests = localOption Never $
                             toF @(FormatSpecifier 𝕋) $
                               conditional (win_last_style∷BoolExpr)
                                           (_E win_stat_last) ()
-                        , "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
+                        , let xx_ ∷ FormatSpecifier 𝕋 =
+                                conditional @(FormatSpecifier 𝕋)
+                                  (And (Or (BVar WindowActivityFlag)
+                                           (BVar WindowSilenceFlag))
+                                       (StrNotEq
+                                          (StrTxt $
+                                             toText ∘ toFormat @(FormatSpecifier StyleVariable) $
+                                               _E $ BareVariable $
+                                                 StyleVar WindowStatusActivityStyle)
+                                          (StyExp DefaultStyle))
+                                   )
+                                   (_E $ BareVariable $
+                                      StyleVar WindowStatusActivityStyle)
+                                   ()
+
+                          in toText ∘ toF @(FormatSpecifier 𝕋) $
+                               conditional @(FormatSpecifier 𝕋)
+                                 (let win_stat_bell =
+                                        BareVariable $ StyleVar WindowStatusBellStyle
+                                  in  And (BVar WindowBellFlag)
+                                          (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_bell)
+                                                    (StyExp DefaultStyle)))
+                                 (_E $ BareVariable $ StyleVar WindowStatusBellStyle)
+                                 xx_
                         ]
 
                 in  toF [ toText ∘ toFormat $
