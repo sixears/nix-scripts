@@ -372,11 +372,12 @@ class IsVariable α
 instance IsVariable FormatVariable
 instance IsVariable StringVariable
 instance IsVariable StyleVariable
+instance IsVariable UserVariable
 
 {- A format specifier is a #{…} group -}
 data FormatSpecifier α = BareOption (Option α)
                        | IsVariable α => BareOption2 α
-                       | BareVariable Variable
+--                       | BareVariable Variable
                        | ExpandTwice WithStrftime (FormatSpecifier α)
                        | MaxLen LenSpec (FormatSpecifier α)
                        | ForEachWindow α α
@@ -405,7 +406,7 @@ stackRank _                 = 0
 innerFormatSpecifier :: FormatSpecifier α → 𝕄 (FormatSpecifier α)
 innerFormatSpecifier (BareOption    _)      = 𝓝
 innerFormatSpecifier (BareOption2   _)      = 𝓝
-innerFormatSpecifier (BareVariable  _)      = 𝓝
+-- innerFormatSpecifier (BareVariable  _)      = 𝓝
 innerFormatSpecifier (MaxLen        _  fs)  = 𝓙 fs
 innerFormatSpecifier (ExpandTwice   _  fs)  = 𝓙 fs
 innerFormatSpecifier (ForEachWindow _ _)    = 𝓝
@@ -417,7 +418,7 @@ innerFormatSpecifier (BareText      _)      = 𝓝
 instance (Show α, ToFormat α, Printable α) => Printable (FormatSpecifier α) where
   print (BareOption   t)           = print t
   print (BareOption2  t)           = print t
-  print (BareVariable t)           = print t
+--  print (BareVariable t)           = print t
   print (ExpandTwice w_strftime _) = P.text $ [fmt|%T|] w_strftime
   print (MaxLen      len_spec   _) = P.text $ [fmt|%T|] len_spec
   print (ForEachWindow other current) =
@@ -454,7 +455,7 @@ main :: IO ()
 main = do
   say $ toFormat (emptyStyle & alignStyle   ⊩ AlignLeft
                              & rangeStyle   ⊩ RangeLeft
-                             & stylePayload ⊩ ExpandTwice @(FormatSpecifier StyleVariable) WithoutStrftime (BareVariable $ StyleVar StatusLeftStyle)
+                             & stylePayload ⊩ ExpandTwice @StyleVariable WithoutStrftime (bareOption StatusLeftStyle)
                  )
 
 --------------------------------------------------------------------------------
@@ -476,15 +477,15 @@ status_left_style  = _E $ bareOption StatusLeftStyle
 status_right_style ∷ FormatSpecifier StyleVariable
 status_right_style = _E $ bareOption StatusRightStyle
 status_left        ∷ FormatSpecifier FormatVariable
-status_left        = BareVariable $ FormatVar StatusLeft
+status_left        = bareOption StatusLeft
 status_right       ∷ FormatSpecifier FormatVariable
-status_right       = BareVariable $ FormatVar StatusRight
+status_right       = bareOption StatusRight
 user_foobie        ∷ UserVariable
 user_foobie        = userVariable "@foobie"
 bare_foobie        ∷ FormatSpecifier UserVariable
-bare_foobie        = BareVariable $ UserVar user_foobie
+bare_foobie        = bareOption user_foobie
 bare_wname         ∷ FormatSpecifier FormatVariable
-bare_wname         = BareVariable $ FormatVar WindowName
+bare_wname         = bareOption WindowName
 
 tests ∷ TestTree
 tests = localOption Never $
@@ -646,18 +647,16 @@ tests = localOption Never $
               )
             , ( "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
               , let xx_ ∷ FormatSpecifier 𝕋 =
-                      conditional @(FormatSpecifier 𝕋)
+                      conditional -- @(FormatSpecifier Styl)
                         (And (Or (BVar WindowActivityFlag)
                                  (BVar WindowSilenceFlag))
                              (StrNotEq
                                 (StrTxt $
                                    toText ∘ toFormat @(FormatSpecifier StyleVariable) $
-                                     _E $ BareVariable $
-                                       StyleVar WindowStatusActivityStyle)
+                                     _E $ bareOption WindowStatusActivityStyle)
                                 (StyExp DefaultStyle))
                          )
-                         (_E $ BareVariable $
-                            StyleVar WindowStatusActivityStyle)
+                         (_E $ bareOption WindowStatusActivityStyle)
                          ()
 
                 in toF @(FormatSpecifier 𝕋) $
@@ -688,18 +687,16 @@ tests = localOption Never $
                               conditional (win_last_style∷BoolExpr)
                                           (_E win_stat_last) ()
                         , let xx_ ∷ FormatSpecifier 𝕋 =
-                                conditional @(FormatSpecifier 𝕋)
+                                conditional -- @(FormatSpecifier StyleVariable)
                                   (And (Or (BVar WindowActivityFlag)
                                            (BVar WindowSilenceFlag))
                                        (StrNotEq
                                           (StrTxt $
                                              toText ∘ toFormat @(FormatSpecifier StyleVariable) $
-                                               _E $ BareVariable $
-                                                 StyleVar WindowStatusActivityStyle)
+                                               _E $ bareOption WindowStatusActivityStyle)
                                           (StyExp DefaultStyle))
                                    )
-                                   (_E $ BareVariable $
-                                      StyleVar WindowStatusActivityStyle)
+                                   (_E $ bareOption WindowStatusActivityStyle)
                                    ()
 
                           in toText ∘ toF @(FormatSpecifier 𝕋) $
