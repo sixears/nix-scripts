@@ -676,14 +676,13 @@ tests = localOption Never $
               )
             , ( "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]"
               , let text_to_style =
-                      ю [ ю[ "#{?"
-                           , T.intercalate ","
-                               [ toText ∘ toFormat $ StrNotEq (StrTxt ∘ toF_SV $ _E $ bareOption WindowStatusCurrentStyle) (StyExp DefaultStyle)
-                               , "#{E:window-status-current-style}"
-                               , "#{E:window-status-style}"
-                               ]
-                           , "}"
-                           ]
+                      ю [ toText ∘ toFormat @(FormatSpecifier 𝕋) $
+                            conditional
+                              (StrNotEq (StrTxt ∘ toF_SV $ _E $
+                                          bareOption WindowStatusCurrentStyle)
+                                        (StyExp DefaultStyle))
+                              (_E $ bareOption WindowStatusCurrentStyle)
+                              (_E $ bareOption WindowStatusStyle)
                         , "#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}"
                         , "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
                         ]
@@ -753,7 +752,13 @@ tests = localOption Never $
                                )
                                (BareText $
                                   let text_to_style =
-                                        ю [ "#{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}"
+                                        ю [ toText ∘ toFormat @(FormatSpecifier 𝕋) $
+                                              conditional
+                                                (StrNotEq (StrTxt ∘ toF_SV $ _E $
+                                                             bareOption WindowStatusCurrentStyle)
+                                                          (StyExp DefaultStyle))
+                                                (_E $ bareOption WindowStatusCurrentStyle)
+                                                (_E $ bareOption WindowStatusStyle)
                                           , "#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}"
                                           , "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}" ]
                                   in  ю [ toText ∘ toFormat $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ StyleText(text_to_style)
