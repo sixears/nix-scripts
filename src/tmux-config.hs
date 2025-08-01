@@ -377,7 +377,7 @@ instance IsVariable StyleVariable
 instance IsVariable UserVariable
 
 {- A format specifier is a #{…} group -}
-data FormatSpecifier α = IsVariable α => BareOption2 α
+data FormatSpecifier α = IsVariable α => BareVariable α
                        | ExpandTwice WithStrftime (FormatSpecifier α)
                        | MaxLen LenSpec (FormatSpecifier α)
                        | ForEachWindow α α
@@ -386,7 +386,7 @@ data FormatSpecifier α = IsVariable α => BareOption2 α
                        | BareText 𝕋
 
 instance Show α => Show (FormatSpecifier α) where
-  show (BareOption2 v)     = [fmt|IsVariable %w|] v
+  show (BareVariable v)     = [fmt|IsVariable %w|] v
   show (ExpandTwice wsf v) = [fmt|ExpandTwice %w %w|] wsf v
   show (MaxLen ls v)       = [fmt|MaxLen %w %w|] ls v
   show (ForEachWindow v w) = [fmt|ForEachWindow %w %w|] v w
@@ -410,7 +410,7 @@ stackRank _                 = 0
 
 innerFormatSpecifier :: FormatSpecifier α → 𝕄 (FormatSpecifier α)
 -- innerFormatSpecifier (BareOption    _)      = 𝓝
-innerFormatSpecifier (BareOption2   _)      = 𝓝
+innerFormatSpecifier (BareVariable   _)      = 𝓝
 -- innerFormatSpecifier (BareVariable  _)      = 𝓝
 innerFormatSpecifier (MaxLen        _  fs)  = 𝓙 fs
 innerFormatSpecifier (ExpandTwice   _  fs)  = 𝓙 fs
@@ -422,7 +422,7 @@ innerFormatSpecifier (BareText      _)      = 𝓝
 
 instance (Show α, ToFormat α, Printable α) => Printable (FormatSpecifier α) where
 --  print (BareOption   t)           = print t
-  print (BareOption2  t)           = print t
+  print (BareVariable  t)           = print t
 --  print (BareVariable t)           = print t
   print (ExpandTwice w_strftime _) = P.text $ [fmt|%T|] w_strftime
   print (MaxLen      len_spec   _) = P.text $ [fmt|%T|] len_spec
@@ -451,7 +451,7 @@ instance (Show α, ToFormat α, Printable α) => ToFormat (FormatSpecifier α) w
 
 bareOption ∷ IsVariable α => α → FormatSpecifier α
 -- bareOption = BareOption ∘ Option
-bareOption = BareOption2
+bareOption = BareVariable
 
 
 -- main ------------------------------------------------------------------------
@@ -584,7 +584,7 @@ tests = localOption Never $
             , ("#{?window_end_flag,,#{window-status-separator}}"
               , toF @(FormatSpecifier 𝕋)
                   (conditional @()
-                   (BVar WindowEndFlag) () (BareOption2 WindowStatusSeparator))
+                   (BVar WindowEndFlag) () (BareVariable WindowStatusSeparator))
               )
             , ( "#[push-default]#{T:window-status-format}#[pop-default]"
               , saveDefault (_T (bareOption WindowStatusFormat))
