@@ -683,7 +683,7 @@ tests = localOption Never $
                  , "}"
                  ]
               , Format $ toT_ $
-                  conditional -- @(FormatSpecifier StyleVariable)
+                  conditional
                     (And (Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag))
                          (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ _E $ bareOption WindowStatusActivityStyle)
                                    (StyExp DefaultStyle)))
@@ -788,8 +788,19 @@ tests = localOption Never $
                                                           (StyExp DefaultStyle))
                                                 (_E $ bareOption WindowStatusCurrentStyle)
                                                 (_E $ bareOption WindowStatusStyle)
-                                          , "#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}"
-                                          , "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}" ]
+                                          , let win_stat_last ∷ FormatSpecifier StyleVariable
+                                                win_stat_last =
+                                                  bareOption WindowStatusLastStyle
+                                                win_last_style =
+                                                  And (BVar WindowLastFlag)
+                                                      (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
+                                                                (StyExp DefaultStyle))
+                                            in  toT @(FormatSpecifier 𝕋) $
+                                                  conditional (win_last_style∷BoolExpr)
+                                                              (_E win_stat_last) ()
+                                                                      , toT $ show_window_bell_or_activity
+                                          ]
+
                                   in  ю [ toText ∘ toFormat $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ StyleText(text_to_style)
                                         , "#[push-default]#{T:window-status-current-format}#[pop-default]"
                                         , "#[norange list=on default]"
