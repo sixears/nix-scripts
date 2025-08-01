@@ -503,10 +503,11 @@ tests = localOption Never $
             toF ∷ ToFormat α => α -> Format SavedDefault
             toF = noSaveDefault ∘ toFormat
             toT ∷ ToFormat α => α -> 𝕋
-            toT = toText ∘ toFormat
-            toT_ = toT @(FormatSpecifier 𝕋)
+            toT    = toText ∘ toFormat
+            toT_   = toT @(FormatSpecifier 𝕋)
             toF_SV ∷ FormatSpecifier StyleVariable → 𝕋
             toF_SV = toText ∘ toFormat @(FormatSpecifier StyleVariable)
+            ç      = T.intercalate ","
 
         in  [ ( "#{window_name}", toF WindowName )
             , ( "#{@foobie}", toF user_foobie )
@@ -634,15 +635,13 @@ tests = localOption Never $
                                 (StyExp DefaultStyle))
               )
 
-            , let ç    = T.intercalate ","
-              in  (ç [ ç [ "#{?#{&&:#{||:#{window_activity_flag}"
-                          , "#{window_silence_flag}}"
-                          , ç ["#{!=:#{E:window-status-activity-style}"
-                              , "default}}" ]
-                          ]
-                      , "#{E:window-status-activity-style}"
-                      , "}"
-                      ]
+            , (ç [ ç [ "#{?#{&&:#{||:#{window_activity_flag}"
+                     , "#{window_silence_flag}}"
+                     , ç ["#{!=:#{E:window-status-activity-style}", "default}}"]
+                     ]
+                 , "#{E:window-status-activity-style}"
+                 , "}"
+                 ]
               , Format $ toT_ $
                   conditional -- @(FormatSpecifier StyleVariable)
                     (And (Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag))
@@ -683,7 +682,19 @@ tests = localOption Never $
                                         (StyExp DefaultStyle))
                               (_E $ bareOption WindowStatusCurrentStyle)
                               (_E $ bareOption WindowStatusStyle)
-                        , "#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}"
+                        , ç [ ю[ "#{?"
+                               , ю [ "#{&&:"
+                                   , ç [ "#{window_last_flag}"
+                                       , toT $
+                                         StrNotEq (StrTxt $ toF_SV $ _E $
+                                                     bareOption
+                                                       WindowStatusLastStyle)
+                                                  (StyExp DefaultStyle)
+                                       ]
+                                   ,"}" ]
+                               ]
+                            , "#{E:window-status-last-style}"
+                            , "}" ]
                         , "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
                         ]
                 in  toF $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ StyleText(text_to_style) )
