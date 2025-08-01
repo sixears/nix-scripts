@@ -159,6 +159,9 @@ instance Printable BooleanVariable where
   print WindowActivityFlag = P.text "window_activity_flag"
   print WindowSilenceFlag  = P.text "window_silence_flag"
 
+instance ToFormat BooleanVariable where
+  toFormat bv = Format $ [fmt|#{%T}|] bv
+
 ------------------------------------------------------------
 
 data Variable = BoolVar BooleanVariable
@@ -371,6 +374,7 @@ instance Printable WithStrftime where
 
 class IsVariable α
 
+instance IsVariable BooleanVariable
 instance IsVariable FormatVariable
 instance IsVariable StringVariable
 instance IsVariable StyleVariable
@@ -682,19 +686,17 @@ tests = localOption Never $
                                         (StyExp DefaultStyle))
                               (_E $ bareOption WindowStatusCurrentStyle)
                               (_E $ bareOption WindowStatusStyle)
-                        , ç [ ю[ "#{?"
-                               , ю [ "#{&&:"
-                                   , ç [ "#{window_last_flag}"
-                                       , toT $
-                                         StrNotEq (StrTxt $ toF_SV $ _E $
+
+                        , toText ∘ toFormat @(FormatSpecifier 𝕋) $
+                            conditional
+                              (And (BVar WindowLastFlag)
+                                           (StrNotEq (StrTxt $ toF_SV $ _E $
                                                      bareOption
                                                        WindowStatusLastStyle)
-                                                  (StyExp DefaultStyle)
-                                       ]
-                                   ,"}" ]
-                               ]
-                            , "#{E:window-status-last-style}"
-                            , "}" ]
+                                                  (StyExp DefaultStyle)))
+                              (_E $ bareOption WindowStatusLastStyle)
+                              ()
+
                         , "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
                         ]
                 in  toF $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ StyleText(text_to_style) )
