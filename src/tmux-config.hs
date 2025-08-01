@@ -513,6 +513,42 @@ tests = localOption Never $
             toF_SV = toText ∘ toFormat @(FormatSpecifier StyleVariable)
             ç      = T.intercalate ","
 
+            {- if ⋀ ( (window-has-activity ∨ silence)
+                    , window-status-activity-style != default )
+               then window-status-activity-style
+               else nothing
+             -}
+            show_window_activity ∷ FormatSpecifier 𝕋 =
+
+              conditional
+                (And (Or (BVar WindowActivityFlag)
+                         (BVar WindowSilenceFlag))
+                     (StrNotEq
+                        (StrTxt $
+                           toText ∘ toFormat @(FormatSpecifier StyleVariable) $
+                             _E $ bareOption WindowStatusActivityStyle)
+                        (StyExp DefaultStyle))
+                 )
+                 (_E $ bareOption WindowStatusActivityStyle)
+                 ()
+
+             {- if ⋀ ( window-has-bell
+                     , window-status-bell-style != default )
+                then window-status-bell-style
+                else show_window_activity
+              -}
+            show_window_bell_or_activity ∷ FormatSpecifier 𝕋 =
+
+             conditional
+               (let win_stat_bell =
+                      bareOption WindowStatusBellStyle
+                in  And (BVar WindowBellFlag)
+                        (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_bell)
+                                  (StyExp DefaultStyle)))
+               (_E $ bareOption WindowStatusBellStyle)
+               show_window_activity
+
+
         in  [ ( "#{window_name}", toF WindowName )
             , ( "#{@foobie}", toF user_foobie )
             , ( "#{=3:window_name}", toF $ len3 bare_wname )
@@ -654,41 +690,7 @@ tests = localOption Never $
                                    (_E $ bareOption WindowStatusActivityStyle) ()
               )
             , ( "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
-              , let {- if (⋀ ( ( window-has-activity ∨ silence)
-                             , window-status-activity-style != default );
-                       then window-status-activity-style
-                       else nothing
-                     -}
-                    show_window_activity ∷ FormatSpecifier 𝕋 =
-
-                      conditional
-                        (And (Or (BVar WindowActivityFlag)
-                                 (BVar WindowSilenceFlag))
-                             (StrNotEq
-                                (StrTxt $
-                                   toText ∘ toFormat @(FormatSpecifier StyleVariable) $
-                                     _E $ bareOption WindowStatusActivityStyle)
-                                (StyExp DefaultStyle))
-                         )
-                         (_E $ bareOption WindowStatusActivityStyle)
-                         ()
-
-                     {- if ⋀ ( window-has-bell
-                             , window-status-bell-style != default )
-                        then window-status-bell-style
-                        else show_window_activity
-                      -}
-                    show_window_bell_or_activity ∷ FormatSpecifier 𝕋 =
-
-                     conditional
-                       (let win_stat_bell =
-                              bareOption WindowStatusBellStyle
-                        in  And (BVar WindowBellFlag)
-                                (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_bell)
-                                          (StyExp DefaultStyle)))
-                       (_E $ bareOption WindowStatusBellStyle)
-                       show_window_activity
-                in toF $ show_window_bell_or_activity
+              , toF $ show_window_bell_or_activity
               )
             , ( "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]"
               , let text_to_style =
@@ -709,40 +711,12 @@ tests = localOption Never $
                                                   (StyExp DefaultStyle)))
                               (_E $ bareOption WindowStatusLastStyle)
                               ()
-
-                        , ю [ "#{?"
-                            , ç [ ю [ "#{&&:"
-                                    , ç [ "#{window_bell_flag}"
-                                        , ю [ "#{!=:"
-                                            , ç [ "#{E:window-status-bell-style}"
-                                                , "default"
-                                                ]
-                                            , "}" ]
-                                        ]
-                                    , "}"
-                                    ]
-                                , "#{E:window-status-bell-style}"
-                                , ю [ "#{?"
-                                    , ç [ ю[ "#{&&:"
-                                           , ç [ toT $ Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag)
-                                               , ю [ "#{!=:"
-                                                   , "#{E:window-status-activity-style},default"
-                                                   ,"}"
-                                                   ]
-                                               ]
-                                           , "}"
-                                           ]
-                                        , "#{E:window-status-activity-style}"
-                                        , ""
-                                        ]
-                                    , "}"
-                                    ]
-                                ]
-                            , "}"
-                            ]
+                        , toT $ show_window_bell_or_activity
                         ]
-                in  toF $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ StyleText(text_to_style) )
-
+                in  toF $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
+                                     & listStyle ⊩ ListFocus
+                                     & stylePayload ⊩ StyleText text_to_style
+              )
 
             , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                   ]
