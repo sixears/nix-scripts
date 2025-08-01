@@ -654,8 +654,14 @@ tests = localOption Never $
                                    (_E $ bareOption WindowStatusActivityStyle) ()
               )
             , ( "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
-              , let xx_ ∷ FormatSpecifier 𝕋 =
-                      conditional -- @(FormatSpecifier Styl)
+              , let {- if (⋀ ( ( window-has-activity ∨ silence)
+                             , window-status-activity-style != default );
+                       then window-status-activity-style
+                       else nothing
+                     -}
+                    show_window_activity ∷ FormatSpecifier 𝕋 =
+
+                      conditional
                         (And (Or (BVar WindowActivityFlag)
                                  (BVar WindowSilenceFlag))
                              (StrNotEq
@@ -667,15 +673,22 @@ tests = localOption Never $
                          (_E $ bareOption WindowStatusActivityStyle)
                          ()
 
-                in toF @(FormatSpecifier 𝕋) $
-                     conditional -- @(FormatSpecifier StyleVariable)
+                     {- if ⋀ ( window-has-bell
+                             , window-status-bell-style != default )
+                        then window-status-bell-style
+                        else show_window_activity
+                      -}
+                    show_window_bell_or_activity ∷ FormatSpecifier 𝕋 =
+
+                     conditional
                        (let win_stat_bell =
                               bareOption WindowStatusBellStyle
                         in  And (BVar WindowBellFlag)
                                 (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_bell)
                                           (StyExp DefaultStyle)))
                        (_E $ bareOption WindowStatusBellStyle)
-                       xx_
+                       show_window_activity
+                in toF $ show_window_bell_or_activity
               )
             , ( "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]"
               , let text_to_style =
@@ -697,7 +710,36 @@ tests = localOption Never $
                               (_E $ bareOption WindowStatusLastStyle)
                               ()
 
-                        , "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
+                        , ю [ "#{?"
+                            , ç [ ю [ "#{&&:"
+                                    , ç [ "#{window_bell_flag}"
+                                        , ю [ "#{!=:"
+                                            , ç [ "#{E:window-status-bell-style}"
+                                                , "default"
+                                                ]
+                                            , "}" ]
+                                        ]
+                                    , "}"
+                                    ]
+                                , "#{E:window-status-bell-style}"
+                                , ю [ "#{?"
+                                    , ç [ ю[ "#{&&:"
+                                           , ç [ toT $ Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag)
+                                               , ю [ "#{!=:"
+                                                   , "#{E:window-status-activity-style},default"
+                                                   ,"}"
+                                                   ]
+                                               ]
+                                           , "}"
+                                           ]
+                                        , "#{E:window-status-activity-style}"
+                                        , ""
+                                        ]
+                                    , "}"
+                                    ]
+                                ]
+                            , "}"
+                            ]
                         ]
                 in  toF $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ StyleText(text_to_style) )
 
