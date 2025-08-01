@@ -134,14 +134,16 @@ userVariable t                         = error $ "userVariable: '" ◇ T.unpack 
 
 ------------------------------------------------------------
 
-data FormatVariable = StatusLeft | StatusRight | WindowStatusFormat | WindowName
+data FormatVariable = StatusLeft | StatusRight | WindowStatusCurrentFormat
+                    | WindowStatusFormat | WindowName
   deriving Show
 
 instance Printable FormatVariable where
-  print StatusLeft         = P.text "status-left"
-  print StatusRight        = P.text "status-right"
-  print WindowStatusFormat = P.text "window-status-format"
-  print WindowName         = P.text "window_name"
+  print StatusLeft                = P.text "status-left"
+  print StatusRight               = P.text "status-right"
+  print WindowStatusFormat        = P.text "window-status-format"
+  print WindowStatusCurrentFormat = P.text "window-status-current-format"
+  print WindowName                = P.text "window_name"
 
 instance ToFormat FormatVariable where
   toFormat o = Format $ [fmt|#{%T}|] o
@@ -802,7 +804,7 @@ tests = localOption Never $
                                           ]
 
                                   in  ю [ toText ∘ toFormat $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ StyleText(text_to_style)
-                                        , "#[push-default]#{T:window-status-current-format}#[pop-default]"
+                                        , toText $ saveDefault $ _T (bareOption WindowStatusCurrentFormat)
                                         , "#[norange list=on default]"
                                         , "#{?window_end_flag,,#{window-status-separator}}"
                                     ]
