@@ -460,6 +460,18 @@ bareOption ∷ IsVariable α => α → FormatSpecifier α
 bareOption = BareVariable
 
 
+------------------------------------------------------------
+
+data TMuxFormat = TMFS (∀ α . FormatSpecifier α)
+             | ∀ α . (ToFormat α, IsVariable α) => TMFV α
+             | TMFl [TMuxFormat]
+
+instance ToFormat TMuxFormat where
+  toFormat (TMFV v) = toFormat v
+
+tmfT ∷ TMuxFormat → Format SavedDefault
+tmfT tmf = Format ∘ toText $ toFormat tmf
+
 -- main ------------------------------------------------------------------------
 
 main :: IO ()
@@ -552,6 +564,7 @@ tests = localOption Never $
 
 
         in  [ ( "#{window_name}", toF WindowName )
+            , ( "#{window_name}", tmfT $ TMFV WindowName )
             , ( "#{@foobie}", toF user_foobie )
             , ( "#{=3:window_name}", toF $ len3 bare_wname )
             , ( "#{=/#{status-left-length}:window_name}",
@@ -752,7 +765,9 @@ tests = localOption Never $
                          , toText ∘ toFormat $
                              ForEachWindow @(FormatSpecifier 𝕋)
                                (BareText $ ю
-                                [ toText ∘ toFormat $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & stylePayload ⊩ StyleText(text_to_style)
+                                [ toText ∘ toFormat $
+                                    emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
+                                               & stylePayload ⊩ StyleText(text_to_style)
                                 , toText (saveDefault (_T $ bareOption WindowStatusFormat))
                                 , toT (emptyStyle @() & rangeStyle   ⊩ RangeNone
                                                       & styleDefault ⊢ StyleDefault)
