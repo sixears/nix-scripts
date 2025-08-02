@@ -735,28 +735,8 @@ tests = localOption Never $
                             toF @(FormatSpecifier 𝕋) $
                               conditional (win_last_style∷BoolExpr)
                                           (_E win_stat_last) ()
-                        , let xx_ ∷ FormatSpecifier 𝕋 =
-                                conditional
-                                  (And (Or (BVar WindowActivityFlag)
-                                           (BVar WindowSilenceFlag))
-                                       (StrNotEq
-                                          (StrTxt $
-                                             toText ∘ toFormat @(FormatSpecifier StyleVariable) $
-                                               _E $ bareOption WindowStatusActivityStyle)
-                                          (StyExp DefaultStyle))
-                                   )
-                                   (_E $ bareOption WindowStatusActivityStyle)
-                                   ()
-
-                          in toText ∘ toF @(FormatSpecifier 𝕋) $
-                               conditional -- @(FormatSpecifier StyleVariable)
-                                 (let win_stat_bell =
-                                        bareOption WindowStatusBellStyle
-                                  in  And (BVar WindowBellFlag)
-                                          (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_bell)
-                                                    (StyExp DefaultStyle)))
-                                 (_E $ bareOption WindowStatusBellStyle)
-                                 xx_
+                        , toText ∘ toF @(FormatSpecifier 𝕋) $
+                            show_window_bell_or_activity
                         ]
 
                 in  toF [ toText ∘ toFormat $
