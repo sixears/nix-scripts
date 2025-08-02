@@ -462,15 +462,14 @@ bareOption = BareVariable
 
 ------------------------------------------------------------
 
-data TMuxFormat = TMFS (∀ α . FormatSpecifier α)
-             | ∀ α . (ToFormat α, IsVariable α) => TMFV α
-             | TMFl [TMuxFormat]
+data TMuxFormat = ∀ α . (Show α, ToFormat α, Printable α) =>
+                        TMFS (FormatSpecifier α)
+                | ∀ α . (ToFormat α, IsVariable α) => TMFV α
+                | TMFl [TMuxFormat]
 
-instance ToFormat TMuxFormat where
-  toFormat (TMFV v) = toFormat v
-
-tmfT ∷ TMuxFormat → Format SavedDefault
-tmfT tmf = Format ∘ toText $ toFormat tmf
+instance Printable TMuxFormat where
+  print (TMFV v) = P.text ∘ unFormat $ toFormat v
+  print (TMFS f) = P.text ∘ unFormat $ toFormat f
 
 -- main ------------------------------------------------------------------------
 
@@ -563,10 +562,9 @@ tests = localOption Never $
                show_window_activity
 
 
-        in  [ ( "#{window_name}", toF WindowName )
-            , ( "#{window_name}", tmfT $ TMFV WindowName )
-            , ( "#{@foobie}", toF user_foobie )
-            , ( "#{=3:window_name}", toF $ len3 bare_wname )
+        in  [ ( "#{window_name}", Format ∘ toText $ TMFV WindowName )
+            , ( "#{@foobie}", Format ∘ toText $ TMFV user_foobie )
+            , ( "#{=3:window_name}", Format ∘ toText $ TMFS $ len3 bare_wname )
             , ( "#{=/#{status-left-length}:window_name}",
                 toF $ len_left_length bare_wname )
             , ( "#{T:@foobie}", toF $ ExpandTwice WithStrftime bare_foobie )
