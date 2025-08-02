@@ -805,8 +805,16 @@ tests = localOption Never $
 
                                   in  ю [ toText ∘ toFormat $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ StyleText(text_to_style)
                                         , toText $ saveDefault $ _T (bareOption WindowStatusCurrentFormat)
-                                        , "#[norange list=on default]"
-                                        , "#{?window_end_flag,,#{window-status-separator}}"
+                                        , toT @(Style ()) $
+                                            emptyStyle & rangeStyle   ⊩ RangeNone
+                                                       & styleDefault ⊢ StyleDefault
+                                                       & listStyle    ⊩ ListOn
+                                        , toT @(FormatSpecifier 𝕋) $
+                                            conditional @()
+                                              (BVar WindowEndFlag)
+                                              ()
+                                              (BareVariable WindowStatusSeparator)
+
                                     ]
                                )
                          ]
