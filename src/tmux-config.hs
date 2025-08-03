@@ -696,7 +696,6 @@ tests = localOption Never $
                        (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ _E $ bareOption WindowStatusActivityStyle)
                                  (StyExp DefaultStyle))
                )
-
              , (ç [ ç [ "#{?#{&&:#{||:#{window_activity_flag}"
                       , "#{window_silence_flag}}"
                       , ç ["#{!=:#{E:window-status-activity-style}", "default}}"]
@@ -714,34 +713,34 @@ tests = localOption Never $
              , ( "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
                , TMFS $ show_window_bell_or_activity
                )
+
+             , ( "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]"
+               , let text_to_style =
+                       ю [ toText ∘ toFormat @(FormatSpecifier 𝕋) $
+                             conditional
+                               (StrNotEq (StrTxt ∘ toF_SV $ _E $
+                                           bareOption WindowStatusCurrentStyle)
+                                         (StyExp DefaultStyle))
+                               (_E $ bareOption WindowStatusCurrentStyle)
+                               (_E $ bareOption WindowStatusStyle)
+
+                         , toText ∘ toFormat @(FormatSpecifier 𝕋) $
+                             conditional
+                               (And (BVar WindowLastFlag)
+                                            (StrNotEq (StrTxt $ toF_SV $ _E $
+                                                      bareOption
+                                                        WindowStatusLastStyle)
+                                                   (StyExp DefaultStyle)))
+                               (_E $ bareOption WindowStatusLastStyle)
+                               ()
+                         , toT $ show_window_bell_or_activity
+                         ]
+                 in  TMFY $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
+                                       & listStyle ⊩ ListFocus
+                                       & stylePayload ⊩ StyleText text_to_style
+               )
             ])
-          ◇ [ ( "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]"
-              , let text_to_style =
-                      ю [ toText ∘ toFormat @(FormatSpecifier 𝕋) $
-                            conditional
-                              (StrNotEq (StrTxt ∘ toF_SV $ _E $
-                                          bareOption WindowStatusCurrentStyle)
-                                        (StyExp DefaultStyle))
-                              (_E $ bareOption WindowStatusCurrentStyle)
-                              (_E $ bareOption WindowStatusStyle)
-
-                        , toText ∘ toFormat @(FormatSpecifier 𝕋) $
-                            conditional
-                              (And (BVar WindowLastFlag)
-                                           (StrNotEq (StrTxt $ toF_SV $ _E $
-                                                     bareOption
-                                                       WindowStatusLastStyle)
-                                                  (StyExp DefaultStyle)))
-                              (_E $ bareOption WindowStatusLastStyle)
-                              ()
-                        , toT $ show_window_bell_or_activity
-                        ]
-                in  toF $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
-                                     & listStyle ⊩ ListFocus
-                                     & stylePayload ⊩ StyleText text_to_style
-              )
-
-            , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
+          ◇ [ ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                   ]
               , let win_stat_last ∷ FormatSpecifier StyleVariable =
                       bareOption WindowStatusLastStyle
