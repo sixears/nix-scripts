@@ -6,6 +6,12 @@
 {-# LANGUAGE UnicodeSyntax     #-}
 {-# LANGUAGE ViewPatterns      #-}
 
+{- ## look again at conditional.  Shouldn't it be something like
+   BoolExpr -> β -> β -> FormatSpecifier β?  What about empty things,
+   currently (); maybe our types can have a Empty constraint that infers a
+   empty ∷ α method?
+-}
+
 import Base1
 
 import Prelude  ( error )
@@ -680,35 +686,36 @@ tests = localOption Never $
              , ( "#{||:#{window_activity_flag},#{window_silence_flag}}"
                , TMFB $ Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag)
                )
-            ])
-          ◇ [ ( T.intercalate ","
-                [ "#{&&:#{||:#{window_activity_flag},#{window_silence_flag}}"
-                , "#{!=:#{E:window-status-activity-style}"
-                , "default}}" ]
-              , toF $
-                  And (Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag))
-                      (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ _E $ bareOption WindowStatusActivityStyle)
-                                (StyExp DefaultStyle))
-              )
 
-            , (ç [ ç [ "#{?#{&&:#{||:#{window_activity_flag}"
-                     , "#{window_silence_flag}}"
-                     , ç ["#{!=:#{E:window-status-activity-style}", "default}}"]
-                     ]
-                 , "#{E:window-status-activity-style}"
-                 , "}"
-                 ]
-              , Format $ toT_ $
-                  conditional
-                    (And (Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag))
-                         (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ _E $ bareOption WindowStatusActivityStyle)
-                                   (StyExp DefaultStyle)))
-                                   (_E $ bareOption WindowStatusActivityStyle) ()
-              )
-            , ( "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
-              , toF $ show_window_bell_or_activity
-              )
-            , ( "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]"
+             , ( T.intercalate ","
+                 [ "#{&&:#{||:#{window_activity_flag},#{window_silence_flag}}"
+                 , "#{!=:#{E:window-status-activity-style}"
+                 , "default}}" ]
+               , TMFB $
+                   And (Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag))
+                       (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ _E $ bareOption WindowStatusActivityStyle)
+                                 (StyExp DefaultStyle))
+               )
+
+             , (ç [ ç [ "#{?#{&&:#{||:#{window_activity_flag}"
+                      , "#{window_silence_flag}}"
+                      , ç ["#{!=:#{E:window-status-activity-style}", "default}}"]
+                      ]
+                  , "#{E:window-status-activity-style}"
+                  , "}"
+                  ]
+               , TMFS @(FormatSpecifier 𝕋) $
+                   conditional
+                     (And (Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag))
+                          (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ _E $ bareOption WindowStatusActivityStyle)
+                                    (StyExp DefaultStyle)))
+                                    (_E $ bareOption WindowStatusActivityStyle) ()
+               )
+             , ( "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
+               , TMFS $ show_window_bell_or_activity
+               )
+            ])
+          ◇ [ ( "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]"
               , let text_to_style =
                       ю [ toText ∘ toFormat @(FormatSpecifier 𝕋) $
                             conditional
