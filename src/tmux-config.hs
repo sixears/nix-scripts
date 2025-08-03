@@ -713,7 +713,6 @@ tests = localOption Never $
              , ( "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
                , TMFS $ show_window_bell_or_activity
                )
-
              , ( "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]"
                , let text_to_style =
                        ю [ toText ∘ toFormat @(FormatSpecifier 𝕋) $
@@ -739,94 +738,94 @@ tests = localOption Never $
                                        & listStyle ⊩ ListFocus
                                        & stylePayload ⊩ StyleText text_to_style
                )
-            ])
-          ◇ [ ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
-                  ]
-              , let win_stat_last ∷ FormatSpecifier StyleVariable =
-                      bareOption WindowStatusLastStyle
-                    win_last_style ∷ BoolExpr =
-                      And (BVar WindowLastFlag)
-                          (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
-                                    (StyExp DefaultStyle))
-                    text_to_style ∷ 𝕋 =
-                      ю [ toT (ExpandTwice WithoutStrftime
-                                           (bareOption WindowStatusStyle))
-                        , toText $
-                            toF @(FormatSpecifier 𝕋) $
-                              conditional (win_last_style∷BoolExpr)
-                                          (_E win_stat_last) ()
-                        , toText ∘ toF @(FormatSpecifier 𝕋) $
-                            show_window_bell_or_activity
-                        ]
 
-                in  toF [ toText ∘ toFormat $
-                             emptyStyle @() & listStyle ⊩ ListOn
-                                        & alignStyle ⊩ AlignOpt StatusJustify
-                         , toText ∘ toFormat $
-                             emptyStyle @() & listStyle ⊩ ListLeftMarker "<"
-                         , toText ∘ toFormat $
-                             emptyStyle @() & listStyle ⊩ ListRightMarker ">"
-                         , toText ∘ toFormat $
-                             emptyStyle @() & listStyle ⊩ ListOn
-
-                         , toText ∘ toFormat $
-                             ForEachWindow @(FormatSpecifier 𝕋)
-                               (BareText $ ю
-                                [ toText ∘ toFormat $
-                                    emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
-                                               & stylePayload ⊩ StyleText(text_to_style)
-                                , toText (saveDefault (_T $ bareOption WindowStatusFormat))
-                                , toT (emptyStyle @() & rangeStyle   ⊩ RangeNone
-                                                      & styleDefault ⊢ StyleDefault)
-                                , toT_ (conditional (BVar WindowEndFlag)
-                                                   (StringVariableText "")
-                                                   (bareOption WindowStatusSeparator))
-                                 ]
-                               )
-                               (BareText $
-                                  let text_to_style =
-                                        ю [ toText ∘ toFormat @(FormatSpecifier 𝕋) $
-                                              conditional
-                                                (StrNotEq (StrTxt ∘ toF_SV $ _E $
-                                                             bareOption WindowStatusCurrentStyle)
-                                                          (StyExp DefaultStyle))
-                                                (_E $ bareOption WindowStatusCurrentStyle)
-                                                (_E $ bareOption WindowStatusStyle)
-                                          , let win_stat_last ∷ FormatSpecifier StyleVariable
-                                                win_stat_last =
-                                                  bareOption WindowStatusLastStyle
-                                                win_last_style =
-                                                  And (BVar WindowLastFlag)
-                                                      (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
-                                                                (StyExp DefaultStyle))
-                                            in  toT @(FormatSpecifier 𝕋) $
-                                                  conditional (win_last_style∷BoolExpr)
-                                                              (_E win_stat_last) ()
-                                                                      , toT $ show_window_bell_or_activity
-                                          ]
-
-                                  in  ю [ toText ∘ toFormat $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ StyleText(text_to_style)
-                                        , toText $ saveDefault $ _T (bareOption WindowStatusCurrentFormat)
-                                        , toT @(Style ()) $
-                                            emptyStyle & rangeStyle   ⊩ RangeNone
-                                                       & styleDefault ⊢ StyleDefault
-                                                       & listStyle    ⊩ ListOn
-                                        , toT @(FormatSpecifier 𝕋) $
-                                            conditional @()
-                                              (BVar WindowEndFlag)
-                                              ()
-                                              (BareVariable WindowStatusSeparator)
-
-                                    ]
-                               )
+             , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
+                   ]
+               , let win_stat_last ∷ FormatSpecifier StyleVariable =
+                       bareOption WindowStatusLastStyle
+                     win_last_style ∷ BoolExpr =
+                       And (BVar WindowLastFlag)
+                           (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
+                                     (StyExp DefaultStyle))
+                     text_to_style ∷ 𝕋 =
+                       ю [ toT (ExpandTwice WithoutStrftime
+                                            (bareOption WindowStatusStyle))
+                         , toText $
+                             toF @(FormatSpecifier 𝕋) $
+                               conditional (win_last_style∷BoolExpr)
+                                           (_E win_stat_last) ()
+                         , toText ∘ toF @(FormatSpecifier 𝕋) $
+                             show_window_bell_or_activity
                          ]
-              )
-            ]
+
+                 in  TMFL [ TMFY $
+                              emptyStyle @() & listStyle ⊩ ListOn
+                                         & alignStyle ⊩ AlignOpt StatusJustify
+                          , TMFY $
+                              emptyStyle @() & listStyle ⊩ ListLeftMarker "<"
+                          , TMFY $
+                              emptyStyle @() & listStyle ⊩ ListRightMarker ">"
+                          , TMFY $
+                              emptyStyle @() & listStyle ⊩ ListOn
+
+                          , TMFS $
+                              ForEachWindow @(FormatSpecifier 𝕋)
+                                (BareText $ ю
+                                 [ toText ∘ toFormat $
+                                     emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
+                                                & stylePayload ⊩ StyleText(text_to_style)
+                                 , toText (saveDefault (_T $ bareOption WindowStatusFormat))
+                                 , toT (emptyStyle @() & rangeStyle   ⊩ RangeNone
+                                                       & styleDefault ⊢ StyleDefault)
+                                 , toT_ (conditional (BVar WindowEndFlag)
+                                                    (StringVariableText "")
+                                                    (bareOption WindowStatusSeparator))
+                                  ]
+                                )
+                                (BareText $
+                                   let text_to_style =
+                                         ю [ toText ∘ toFormat @(FormatSpecifier 𝕋) $
+                                               conditional
+                                                 (StrNotEq (StrTxt ∘ toF_SV $ _E $
+                                                              bareOption WindowStatusCurrentStyle)
+                                                           (StyExp DefaultStyle))
+                                                 (_E $ bareOption WindowStatusCurrentStyle)
+                                                 (_E $ bareOption WindowStatusStyle)
+                                           , let win_stat_last ∷ FormatSpecifier StyleVariable
+                                                 win_stat_last =
+                                                   bareOption WindowStatusLastStyle
+                                                 win_last_style =
+                                                   And (BVar WindowLastFlag)
+                                                       (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
+                                                                 (StyExp DefaultStyle))
+                                             in  toT @(FormatSpecifier 𝕋) $
+                                                   conditional (win_last_style∷BoolExpr)
+                                                               (_E win_stat_last) ()
+                                                                       , toT $ show_window_bell_or_activity
+                                           ]
+
+                                   in  ю [ toText ∘ toFormat $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ StyleText(text_to_style)
+                                         , toText $ saveDefault $ _T (bareOption WindowStatusCurrentFormat)
+                                         , toT @(Style ()) $
+                                             emptyStyle & rangeStyle   ⊩ RangeNone
+                                                        & styleDefault ⊢ StyleDefault
+                                                        & listStyle    ⊩ ListOn
+                                         , toT @(FormatSpecifier 𝕋) $
+                                             conditional @()
+                                               (BVar WindowEndFlag)
+                                               ()
+                                               (BareVariable WindowStatusSeparator)
+
+                                     ]
+                                )
+                          ]
+               )
+             ])
+
       do_test :: (𝕋, Format α) → TestTree
       do_test (t,x) = let tname = if T.length t > 60
                                   then T.unpack (T.take 60 t) ◇ "…"
                                   else T.unpack t
-
                       in  testCase tname (t @=? toText x)
   in  testGroup "tests" $ do_test ⊳ ts_
 
