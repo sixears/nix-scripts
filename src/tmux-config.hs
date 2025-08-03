@@ -637,7 +637,7 @@ tests = localOption Never $
                                       (emptyStyle @() & listStyle ⊩ ListFocus)
                )
              , ("#{?window_end_flag,,#{window-status-separator}}"
-               , TMFS @(FormatSpecifier 𝕋) $
+               , TMFS @(FormatSpecifier StringVariable) $
                    conditional @()
                     (BVar WindowEndFlag) () (BareVariable WindowStatusSeparator)
                )
