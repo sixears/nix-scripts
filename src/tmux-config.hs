@@ -467,6 +467,7 @@ data TMuxFormat = ∀ α . (ToFormat α, IsVariable α) => TMFV α
                         TMFS (FormatSpecifier α)
                 | ∀ α . (ToFormat α) => TMFY (Style α)
                 | ∀ α . TMFF (Format α)
+                | TMFB BoolExpr
                 | TMFL [TMuxFormat]
 
 instance Printable TMuxFormat where
@@ -474,6 +475,7 @@ instance Printable TMuxFormat where
   print (TMFS s) = P.text ∘ unFormat $ toFormat s
   print (TMFY y) = P.text ∘ unFormat $ toFormat y
   print (TMFF f) = P.text ∘ unFormat $ f
+  print (TMFB b) = P.text ∘ unFormat $ toFormat b
   print (TMFL l) = P.text ∘ ю $ toText ⊳ l
 
 -- main ------------------------------------------------------------------------
@@ -574,7 +576,6 @@ tests = localOption Never $
              , ( "#{=/#{status-left-length}:window_name}"
                , TMFS $ len_left_length bare_wname )
              , ( "#{T:@foobie}", TMFS $ ExpandTwice WithStrftime bare_foobie )
-
              , ( -- "#{=3:#{E:@foobie}}" would also work, but is less compact
                 "#{E;=3:@foobie}", TMFS $ len3 (_E bare_foobie) )
 
@@ -602,12 +603,13 @@ tests = localOption Never $
              , ( ю [ "#[norange default]"
                    , "#[range=right nolist align=right #{E:status-right-style}]"
                    ]
-               , TMFL [ TMFY $ emptyStyle @() & rangeStyle   ⊩ RangeNone
-                                          & styleDefault ⊢ StyleDefault
-                      , TMFY $ emptyStyle & listStyle    ⊩ ListNone
-                                          & alignStyle   ⊩ AlignRight
-                                          & rangeStyle   ⊩ RangeRight
-                                          & stylePayload ⊩ status_right_style
+               , TMFL [ -- the @() is needed to specify the payload type
+                        TMFY $ emptyStyle @() & rangeStyle   ⊩ RangeNone
+                                              & styleDefault ⊢ StyleDefault
+                      , TMFY $ emptyStyle     & listStyle    ⊩ ListNone
+                                              & alignStyle   ⊩ AlignRight
+                                              & rangeStyle   ⊩ RangeRight
+                                              & stylePayload ⊩ status_right_style
                       ]
                )
              , ( ю [ "#[push-default]"
@@ -616,74 +618,70 @@ tests = localOption Never $
                    ]
                , TMFF $ saveDefault (_T $ len_right_length status_right)
                )
+             , ( "#[list=on align=#{status-justify}]"
+               , TMFY $ emptyStyle @() & listStyle ⊩ ListOn
+                                       & alignStyle ⊩ AlignOpt StatusJustify
+               )
+             , ( "#[list=left-marker]<"
+               , TMFY $ emptyStyle @() & listStyle ⊩ ListLeftMarker "<"
+               )
+             , ( "#[list=right-marker]>"
+               , TMFY $ emptyStyle @() & listStyle ⊩ ListRightMarker ">"
+               )
+             , ( "#[list=on]", TMFY $ emptyStyle @() & listStyle ⊩ ListOn )
+             , ( "#{W:#{status-left},#{status-right}}",
+                 TMFS $ ForEachWindow status_left status_right
+               )
+             , ( "#{W:#[list=on],#[list=focus]}",
+                 TMFS $ ForEachWindow (emptyStyle @() & listStyle ⊩ ListOn)
+                                      (emptyStyle @() & listStyle ⊩ ListFocus)
+               )
+             , ("#{?window_end_flag,,#{window-status-separator}}"
+               , TMFS @(FormatSpecifier 𝕋) $
+                   conditional @()
+                    (BVar WindowEndFlag) () (BareVariable WindowStatusSeparator)
+               )
+
+             , ( "#[push-default]#{T:window-status-format}#[pop-default]"
+               , TMFF $ saveDefault (_T (bareOption WindowStatusFormat))
+               )
+             , ( "#[range=window|#{window_index} foo]"
+               , TMFY $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
+                                   & stylePayload ⊩ (StyleText "foo")
+               )
+
+             , ( T.intercalate "," [ "#{&&:#{window_last_flag}"
+                                   , "#{!=:#{E:window-status-last-style}"
+                                   , "default}}"
+                                   ]
+               , let win_stat_last =
+                       bareOption WindowStatusLastStyle
+                 in  TMFB (And (BVar WindowLastFlag)
+                              (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
+                                        (StyExp DefaultStyle)))
+               )
+             , ( T.intercalate "," [ "#{?#{&&:#{window_last_flag}"
+                                   , "#{!=:#{E:window-status-last-style}"
+                                   , "default}}"
+                                   , "#{E:window-status-last-style}"
+                                   , "}"
+                                   ]
+               , let win_stat_last ∷ FormatSpecifier StyleVariable
+                     win_stat_last =
+                       bareOption WindowStatusLastStyle
+                     win_last_style =
+                       And (BVar WindowLastFlag)
+                           (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
+                                     (StyExp DefaultStyle))
+                 in  TMFS @(FormatSpecifier 𝕋) $
+                       conditional (win_last_style∷BoolExpr)
+                                   (_E win_stat_last) ()
+               )
+             , ( "#{||:#{window_activity_flag},#{window_silence_flag}}"
+               , TMFB $ Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag)
+               )
             ])
-          ◇ [ ( "#[list=on align=#{status-justify}]"
-              , toF (emptyStyle @() & listStyle ⊩ ListOn
-                                  & alignStyle ⊩ AlignOpt StatusJustify)
-              )
-
-            , ( "#[list=left-marker]<"
-              , toF $ emptyStyle @() & listStyle ⊩ ListLeftMarker "<"
-              )
-
-            , ( "#[list=right-marker]>"
-              , toF $ emptyStyle @() & listStyle ⊩ ListRightMarker ">"
-              )
-
-            , ( "#[list=on]", toF (emptyStyle @() & listStyle ⊩ ListOn) )
-
-            , ( "#{W:#{status-left},#{status-right}}",
-                toF (ForEachWindow status_left status_right)
-              )
-            , ( "#{W:#[list=on],#[list=focus]}",
-                toF (ForEachWindow (emptyStyle @() & listStyle ⊩ ListOn)
-                                   (emptyStyle @() & listStyle ⊩ ListFocus))
-              )
-            , ("#{?window_end_flag,,#{window-status-separator}}"
-              , toF @(FormatSpecifier 𝕋)
-                  (conditional @()
-                   (BVar WindowEndFlag) () (BareVariable WindowStatusSeparator))
-              )
-            , ( "#[push-default]#{T:window-status-format}#[pop-default]"
-              , saveDefault (_T (bareOption WindowStatusFormat))
-              )
-            , ( "#[range=window|#{window_index} foo]"
-              , toF (emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
-                                & stylePayload ⊩ (StyleText "foo"))
-              )
-
-            , ( T.intercalate "," [ "#{&&:#{window_last_flag}"
-                                  , "#{!=:#{E:window-status-last-style}"
-                                  , "default}}"
-                                  ]
-              , let win_stat_last =
-                      bareOption WindowStatusLastStyle
-                in  toF (And (BVar WindowLastFlag)
-                             (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
-                                       (StyExp DefaultStyle)))
-              )
-            , ( T.intercalate "," [ "#{?#{&&:#{window_last_flag}"
-                                  , "#{!=:#{E:window-status-last-style}"
-                                  , "default}}"
-                                  , "#{E:window-status-last-style}"
-                                  , "}"
-                                  ]
-              , let win_stat_last ∷ FormatSpecifier StyleVariable
-                    win_stat_last =
-                      bareOption WindowStatusLastStyle
-                    win_last_style =
-                      And (BVar WindowLastFlag)
-                          (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
-                                    (StyExp DefaultStyle))
-                in  toF @(FormatSpecifier 𝕋) $
-                      conditional (win_last_style∷BoolExpr)
-                                  (_E win_stat_last) ()
-              )
-            , ( "#{||:#{window_activity_flag},#{window_silence_flag}}"
-              , toF $ Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag)
-              )
-
-            , ( T.intercalate ","
+          ◇ [ ( T.intercalate ","
                 [ "#{&&:#{||:#{window_activity_flag},#{window_silence_flag}}"
                 , "#{!=:#{E:window-status-activity-style}"
                 , "default}}" ]
