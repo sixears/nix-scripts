@@ -462,14 +462,19 @@ bareOption = BareVariable
 
 ------------------------------------------------------------
 
-data TMuxFormat = ∀ α . (Show α, ToFormat α, Printable α) =>
+data TMuxFormat = ∀ α . (ToFormat α, IsVariable α) => TMFV α
+                | ∀ α . (Show α, ToFormat α, Printable α) =>
                         TMFS (FormatSpecifier α)
-                | ∀ α . (ToFormat α, IsVariable α) => TMFV α
-                | TMFl [TMuxFormat]
+                | ∀ α . (ToFormat α) => TMFY (Style α)
+                | ∀ α . TMFF (Format α)
+                | TMFL [TMuxFormat]
 
 instance Printable TMuxFormat where
   print (TMFV v) = P.text ∘ unFormat $ toFormat v
-  print (TMFS f) = P.text ∘ unFormat $ toFormat f
+  print (TMFS s) = P.text ∘ unFormat $ toFormat s
+  print (TMFY y) = P.text ∘ unFormat $ toFormat y
+  print (TMFF f) = P.text ∘ unFormat $ f
+  print (TMFL l) = P.text ∘ ю $ toText ⊳ l
 
 -- main ------------------------------------------------------------------------
 
@@ -562,57 +567,57 @@ tests = localOption Never $
                show_window_activity
 
 
-        in  [ ( "#{window_name}", Format ∘ toText $ TMFV WindowName )
-            , ( "#{@foobie}", Format ∘ toText $ TMFV user_foobie )
-            , ( "#{=3:window_name}", Format ∘ toText $ TMFS $ len3 bare_wname )
-            , ( "#{=/#{status-left-length}:window_name}",
-                toF $ len_left_length bare_wname )
-            , ( "#{T:@foobie}", toF $ ExpandTwice WithStrftime bare_foobie )
-            , ( -- "#{=3:#{E:@foobie}}" would also work, but is less compact
-                "#{E;=3:@foobie}", toF $ len3 (_E bare_foobie) )
+        in  ((second (Format ∘ toText)) ⊳
+             [ ( "#{window_name}", TMFV WindowName )
+             , ( "#{@foobie}", TMFV user_foobie )
+             , ( "#{=3:window_name}", TMFS $ len3 bare_wname )
+             , ( "#{=/#{status-left-length}:window_name}"
+               , TMFS $ len_left_length bare_wname )
+             , ( "#{T:@foobie}", TMFS $ ExpandTwice WithStrftime bare_foobie )
 
-            {- The ordering of the T and the =1 doesn't matter; the T always
-               effects:
-               > $ tmux set-option @foobie %Y-%M-%d
-               > $ tmux display-message -p '#{T;=/1:#{@foobie}}'
-               > 2
-               > $ tmux display-message -p '#{=/1:#{T:@foobie}}'
-               > 2
-            -}
-            , ( "#{T;=3:@foobie}", toF $ _T $ len3 bare_foobie)
+             , ( -- "#{=3:#{E:@foobie}}" would also work, but is less compact
+                "#{E;=3:@foobie}", TMFS $ len3 (_E bare_foobie) )
 
-            , ( "#{T;=3:@foobie}", toF $ len3 $ _T bare_foobie)
-            , ( "#{=/#{status-left-length}:window_name}",
-                toF $ len_left_length bare_wname )
-            , ( "#{E;=3:window_name}", toF $ _E $ len3 bare_wname )
-            , ( "#[range=left align=left #{E:status-left-style}]"
-              , toF left_style_status
-              )
-            , ( ю [ "#[push-default]"
-                  , "#{T;=/#{status-left-length}:status-left}"
-                  , "#[pop-default]" ]
-              , saveDefault (_T $ len_left_length status_left)
-              )
-            , ( ю [ "#[norange default]"
-                  , "#[range=right nolist align=right #{E:status-right-style}]"
-                  ]
-              , toF [ emptyStyle & rangeStyle   ⊩ RangeNone
-                                 & styleDefault ⊢ StyleDefault
-                    , emptyStyle & listStyle    ⊩ ListNone
-                                 & alignStyle   ⊩ AlignRight
-                                 & rangeStyle   ⊩ RangeRight
-                                 & stylePayload ⊩ status_right_style
-                    ]
-              )
-
-            , ( ю [ "#[push-default]"
-                  , "#{T;=/#{status-right-length}:status-right}"
-                  , "#[pop-default]"
-                  ]
-              , saveDefault (_T $ len_right_length status_right)
-              )
-
-            , ( "#[list=on align=#{status-justify}]"
+             {- The ordering of the T and the =1 doesn't matter; the T always
+                effects:
+                > $ tmux set-option @foobie %Y-%M-%d
+                > $ tmux display-message -p '#{T;=/1:#{@foobie}}'
+                > 2
+                > $ tmux display-message -p '#{=/1:#{T:@foobie}}'
+                > 2
+             -}
+             , ( "#{T;=3:@foobie}", TMFS $ _T $ len3 bare_foobie)
+             , ( "#{T;=3:@foobie}", TMFS $ len3 $ _T bare_foobie)
+             , ( "#{=/#{status-left-length}:window_name}"
+               , TMFS $ len_left_length bare_wname )
+             , ( "#{E;=3:window_name}", TMFS $ _E $ len3 bare_wname )
+             , ( "#[range=left align=left #{E:status-left-style}]"
+               , TMFY left_style_status
+               )
+             , ( ю [ "#[push-default]"
+                   , "#{T;=/#{status-left-length}:status-left}"
+                   , "#[pop-default]" ]
+               , TMFF $ saveDefault (_T $ len_left_length status_left)
+               )
+             , ( ю [ "#[norange default]"
+                   , "#[range=right nolist align=right #{E:status-right-style}]"
+                   ]
+               , TMFL [ TMFY $ emptyStyle @() & rangeStyle   ⊩ RangeNone
+                                          & styleDefault ⊢ StyleDefault
+                      , TMFY $ emptyStyle & listStyle    ⊩ ListNone
+                                          & alignStyle   ⊩ AlignRight
+                                          & rangeStyle   ⊩ RangeRight
+                                          & stylePayload ⊩ status_right_style
+                      ]
+               )
+             , ( ю [ "#[push-default]"
+                   , "#{T;=/#{status-right-length}:status-right}"
+                   , "#[pop-default]"
+                   ]
+               , TMFF $ saveDefault (_T $ len_right_length status_right)
+               )
+            ])
+          ◇ [ ( "#[list=on align=#{status-justify}]"
               , toF (emptyStyle @() & listStyle ⊩ ListOn
                                   & alignStyle ⊩ AlignOpt StatusJustify)
               )
