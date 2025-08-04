@@ -3,6 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms   #-}
 {-# LANGUAGE QuasiQuotes       #-}
+-- {-# LANGUAGE UndecidableInstances     #-}
 {-# LANGUAGE UnicodeSyntax     #-}
 {-# LANGUAGE ViewPatterns      #-}
 
@@ -10,6 +11,23 @@
    BoolExpr -> β -> β -> FormatSpecifier β?  What about empty things,
    currently (); maybe our types can have a Empty constraint that infers a
    empty ∷ α method?
+-}
+
+{- ## remove BareText ? -}
+
+{- ## look again at conditional.  Shouldn't it be something like
+   BoolExpr -> β -> β -> FormatSpecifier β?  What about empty things,
+   currently (); maybe our types can have a Empty constraint that infers a
+   empty ∷ α method?
+-}
+
+{- ## can we construct some class for "convert to TMuxFormat", such that all
+      the conversions (constructors) are inferred from the type?
+-}
+
+{- ## replace ForEachWindow with a version that uses TMuxFormat (x2) to avoid
+      having BareText instance of FormatSpecifier.  Possibly requires, or
+      would benefit from, removing the Show instance of FormatSpecifier.
 -}
 
 import Base1
@@ -468,21 +486,52 @@ bareOption = BareVariable
 
 ------------------------------------------------------------
 
-data TMuxFormat = ∀ α . (ToFormat α, IsVariable α) => TMFV α
+data TMuxFormatTyped α = (ToFormat α, IsVariable α) => TMFV α
+                       | (ToFormat α) => TMFY (Style α)
+                       | (Show α, ToFormat α, Printable α) =>
+                           TMFS (FormatSpecifier α)
+
+instance Printable (TMuxFormatTyped α) where
+  print (TMFV v) = P.text ∘ unFormat $ toFormat v
+  print (TMFY y) = P.text ∘ unFormat $ toFormat y
+  print (TMFS s) = P.text ∘ unFormat $ toFormat s
+
+data TMuxFormat = ∀ α . TMFT (TMuxFormatTyped α)
+{-
                 | ∀ α . (Show α, ToFormat α, Printable α) =>
                         TMFS (FormatSpecifier α)
-                | ∀ α . (ToFormat α) => TMFY (Style α)
+-}
+                -- | ∀ α . (ToFormat α) => TMFY (Style α)
                 | ∀ α . TMFF (Format α)
                 | TMFB BoolExpr
                 | TMFL [TMuxFormat]
 
 instance Printable TMuxFormat where
-  print (TMFV v) = P.text ∘ unFormat $ toFormat v
-  print (TMFS s) = P.text ∘ unFormat $ toFormat s
-  print (TMFY y) = P.text ∘ unFormat $ toFormat y
+  print (TMFT t) = print t
+--  print (TMFS s) = P.text ∘ unFormat $ toFormat s
   print (TMFF f) = P.text ∘ unFormat $ f
   print (TMFB b) = P.text ∘ unFormat $ toFormat b
   print (TMFL l) = P.text ∘ ю $ toText ⊳ l
+
+class TMuxFormatable α where
+  tmf ∷ α → TMuxFormat
+
+instance ToFormat α => TMuxFormatable (Style α) where
+  tmf = TMFT ∘ TMFY
+
+instance (Show α, ToFormat α, Printable α) =>
+         TMuxFormatable (FormatSpecifier α) where
+  tmf = TMFT ∘ TMFS
+
+tmfv ∷ (ToFormat α, IsVariable α) => α → TMuxFormat
+tmfv = TMFT ∘ TMFV
+
+{- requires UndecidableInstances -}
+-- instance (ToFormat α, IsVariable α) => TMuxFormatable α where tmf = tmfv
+instance TMuxFormatable FormatVariable where
+  tmf = tmfv
+instance TMuxFormatable UserVariable where
+  tmf = tmfv
 
 -- main ------------------------------------------------------------------------
 
@@ -576,14 +625,14 @@ tests = localOption Never $
 
 
         in  ((second (Format ∘ toText)) ⊳
-             [ ( "#{window_name}", TMFV WindowName )
-             , ( "#{@foobie}", TMFV user_foobie )
-             , ( "#{=3:window_name}", TMFS $ len3 bare_wname )
+             [ ( "#{window_name}", tmf WindowName )
+             , ( "#{@foobie}", tmf user_foobie )
+             , ( "#{=3:window_name}", tmf $ len3 bare_wname )
              , ( "#{=/#{status-left-length}:window_name}"
-               , TMFS $ len_left_length bare_wname )
-             , ( "#{T:@foobie}", TMFS $ ExpandTwice WithStrftime bare_foobie )
+               , tmf $ len_left_length bare_wname )
+             , ( "#{T:@foobie}", tmf $ ExpandTwice WithStrftime bare_foobie )
              , ( -- "#{=3:#{E:@foobie}}" would also work, but is less compact
-                "#{E;=3:@foobie}", TMFS $ len3 (_E bare_foobie) )
+                "#{E;=3:@foobie}", tmf $ len3 (_E bare_foobie) )
 
              {- The ordering of the T and the =1 doesn't matter; the T always
                 effects:
@@ -593,13 +642,13 @@ tests = localOption Never $
                 > $ tmux display-message -p '#{=/1:#{T:@foobie}}'
                 > 2
              -}
-             , ( "#{T;=3:@foobie}", TMFS $ _T $ len3 bare_foobie)
-             , ( "#{T;=3:@foobie}", TMFS $ len3 $ _T bare_foobie)
+             , ( "#{T;=3:@foobie}", tmf $ _T $ len3 bare_foobie)
+             , ( "#{T;=3:@foobie}", tmf $ len3 $ _T bare_foobie)
              , ( "#{=/#{status-left-length}:window_name}"
-               , TMFS $ len_left_length bare_wname )
-             , ( "#{E;=3:window_name}", TMFS $ _E $ len3 bare_wname )
+               , tmf $ len_left_length bare_wname )
+             , ( "#{E;=3:window_name}", tmf $ _E $ len3 bare_wname )
              , ( "#[range=left align=left #{E:status-left-style}]"
-               , TMFY left_style_status
+               , tmf left_style_status
                )
              , ( ю [ "#[push-default]"
                    , "#{T;=/#{status-left-length}:status-left}"
@@ -610,9 +659,9 @@ tests = localOption Never $
                    , "#[range=right nolist align=right #{E:status-right-style}]"
                    ]
                , TMFL [ -- the @() is needed to specify the payload type
-                        TMFY $ emptyStyle @() & rangeStyle   ⊩ RangeNone
+                        tmf $ emptyStyle @() & rangeStyle   ⊩ RangeNone
                                               & styleDefault ⊢ StyleDefault
-                      , TMFY $ emptyStyle     & listStyle    ⊩ ListNone
+                      , tmf $ emptyStyle     & listStyle    ⊩ ListNone
                                               & alignStyle   ⊩ AlignRight
                                               & rangeStyle   ⊩ RangeRight
                                               & stylePayload ⊩ status_right_style
@@ -625,25 +674,25 @@ tests = localOption Never $
                , TMFF $ saveDefault (_T $ len_right_length status_right)
                )
              , ( "#[list=on align=#{status-justify}]"
-               , TMFY $ emptyStyle @() & listStyle ⊩ ListOn
+               , tmf $ emptyStyle @() & listStyle ⊩ ListOn
                                        & alignStyle ⊩ AlignOpt StatusJustify
                )
              , ( "#[list=left-marker]<"
-               , TMFY $ emptyStyle @() & listStyle ⊩ ListLeftMarker "<"
+               , tmf $ emptyStyle @() & listStyle ⊩ ListLeftMarker "<"
                )
              , ( "#[list=right-marker]>"
-               , TMFY $ emptyStyle @() & listStyle ⊩ ListRightMarker ">"
+               , tmf $ emptyStyle @() & listStyle ⊩ ListRightMarker ">"
                )
-             , ( "#[list=on]", TMFY $ emptyStyle @() & listStyle ⊩ ListOn )
+             , ( "#[list=on]", tmf $ emptyStyle @() & listStyle ⊩ ListOn )
              , ( "#{W:#{status-left},#{status-right}}",
-                 TMFS $ ForEachWindow status_left status_right
+                 tmf $ ForEachWindow status_left status_right
                )
              , ( "#{W:#[list=on],#[list=focus]}",
-                 TMFS $ ForEachWindow (emptyStyle @() & listStyle ⊩ ListOn)
+                 tmf $ ForEachWindow (emptyStyle @() & listStyle ⊩ ListOn)
                                       (emptyStyle @() & listStyle ⊩ ListFocus)
                )
              , ("#{?window_end_flag,,#{window-status-separator}}"
-               , TMFS @(FormatSpecifier StringVariable) $
+               , tmf @(FormatSpecifier StringVariable) $
                    conditional @()
                     (BVar WindowEndFlag) () (BareVariable WindowStatusSeparator)
                )
@@ -652,7 +701,7 @@ tests = localOption Never $
                , TMFF $ saveDefault (_T (bareOption WindowStatusFormat))
                )
              , ( "#[range=window|#{window_index} foo]"
-               , TMFY $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
+               , tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
                                    & stylePayload ⊩ (StyleText "foo")
                )
 
@@ -679,7 +728,7 @@ tests = localOption Never $
                        And (BVar WindowLastFlag)
                            (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
                                      (StyExp DefaultStyle))
-                 in  TMFS @(FormatSpecifier 𝕋) $
+                 in  tmf @(FormatSpecifier 𝕋) $
                        conditional (win_last_style∷BoolExpr)
                                    (_E win_stat_last) ()
                )
@@ -703,7 +752,7 @@ tests = localOption Never $
                   , "#{E:window-status-activity-style}"
                   , "}"
                   ]
-               , TMFS @(FormatSpecifier 𝕋) $
+               , tmf @(FormatSpecifier 𝕋) $
                    conditional
                      (And (Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag))
                           (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ _E $ bareOption WindowStatusActivityStyle)
@@ -711,7 +760,7 @@ tests = localOption Never $
                                     (_E $ bareOption WindowStatusActivityStyle) ()
                )
              , ( "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
-               , TMFS $ show_window_bell_or_activity
+               , tmf $ show_window_bell_or_activity
                )
              , ( "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]"
                , let text_to_style =
@@ -734,7 +783,7 @@ tests = localOption Never $
                                ()
                          , toT $ show_window_bell_or_activity
                          ]
-                 in  TMFY $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
+                 in  tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
                                        & listStyle ⊩ ListFocus
                                        & stylePayload ⊩ StyleText text_to_style
                )
@@ -758,17 +807,17 @@ tests = localOption Never $
                              show_window_bell_or_activity
                          ]
 
-                 in  TMFL [ TMFY $
+                 in  TMFL [ tmf $
                               emptyStyle @() & listStyle ⊩ ListOn
                                          & alignStyle ⊩ AlignOpt StatusJustify
-                          , TMFY $
+                          , tmf $
                               emptyStyle @() & listStyle ⊩ ListLeftMarker "<"
-                          , TMFY $
+                          , tmf $
                               emptyStyle @() & listStyle ⊩ ListRightMarker ">"
-                          , TMFY $
+                          , tmf $
                               emptyStyle @() & listStyle ⊩ ListOn
 
-                          , TMFS $
+                          , tmf $
                               ForEachWindow @(FormatSpecifier 𝕋)
                                 (BareText $ ю
                                  [ toText ∘ toFormat $
