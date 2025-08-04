@@ -490,26 +490,24 @@ data TMuxFormatTyped α = (ToFormat α, IsVariable α) => TMFV α
                        | (ToFormat α) => TMFY (Style α)
                        | (Show α, ToFormat α, Printable α) =>
                            TMFS (FormatSpecifier α)
+                       | TMFF (Format α)
 
 instance Printable (TMuxFormatTyped α) where
   print (TMFV v) = P.text ∘ unFormat $ toFormat v
   print (TMFY y) = P.text ∘ unFormat $ toFormat y
   print (TMFS s) = P.text ∘ unFormat $ toFormat s
+  print (TMFF f) = P.text ∘ unFormat $ f
 
 data TMuxFormat = ∀ α . TMFT (TMuxFormatTyped α)
 {-
                 | ∀ α . (Show α, ToFormat α, Printable α) =>
                         TMFS (FormatSpecifier α)
 -}
-                -- | ∀ α . (ToFormat α) => TMFY (Style α)
-                | ∀ α . TMFF (Format α)
                 | TMFB BoolExpr
                 | TMFL [TMuxFormat]
 
 instance Printable TMuxFormat where
   print (TMFT t) = print t
---  print (TMFS s) = P.text ∘ unFormat $ toFormat s
-  print (TMFF f) = P.text ∘ unFormat $ f
   print (TMFB b) = P.text ∘ unFormat $ toFormat b
   print (TMFL l) = P.text ∘ ю $ toText ⊳ l
 
@@ -518,6 +516,31 @@ class TMuxFormatable α where
 
 instance ToFormat α => TMuxFormatable (Style α) where
   tmf = TMFT ∘ TMFY
+
+{- This fails with:
+
+tmux-config.hs:525:17: error: [GHC-25897]
+    • Couldn't match type ‘k’ with ‘*’
+      Expected: Format @{k} α -> TMuxFormatTyped α0
+        Actual: Format @{*} α0 -> TMuxFormatTyped α0
+      ‘k’ is a rigid type variable bound by
+        the instance declaration
+        at tmux-config.hs:524:10-34
+    • In the second argument of ‘(∘)’, namely ‘TMFF’
+      In the expression: TMFT ∘ TMFF
+      In an equation for ‘tmf’: tmf = TMFT ∘ TMFF
+    • Relevant bindings include
+        tmf :: Format α -> TMuxFormat (bound at tmux-config.hs:525:4)
+
+instance TMuxFormatable (Format α) where
+   tmf = TMFT ∘ TMFF
+-}
+
+instance TMuxFormatable (Format UnsavedDefault) where
+   tmf = TMFT ∘ TMFF
+
+instance TMuxFormatable (Format SavedDefault) where
+   tmf = TMFT ∘ TMFF
 
 instance (Show α, ToFormat α, Printable α) =>
          TMuxFormatable (FormatSpecifier α) where
@@ -653,7 +676,7 @@ tests = localOption Never $
              , ( ю [ "#[push-default]"
                    , "#{T;=/#{status-left-length}:status-left}"
                    , "#[pop-default]" ]
-               , TMFF $ saveDefault (_T $ len_left_length status_left)
+               , tmf $ saveDefault (_T $ len_left_length status_left)
                )
              , ( ю [ "#[norange default]"
                    , "#[range=right nolist align=right #{E:status-right-style}]"
@@ -671,7 +694,7 @@ tests = localOption Never $
                    , "#{T;=/#{status-right-length}:status-right}"
                    , "#[pop-default]"
                    ]
-               , TMFF $ saveDefault (_T $ len_right_length status_right)
+               , tmf $ saveDefault (_T $ len_right_length status_right)
                )
              , ( "#[list=on align=#{status-justify}]"
                , tmf $ emptyStyle @() & listStyle ⊩ ListOn
@@ -698,7 +721,7 @@ tests = localOption Never $
                )
 
              , ( "#[push-default]#{T:window-status-format}#[pop-default]"
-               , TMFF $ saveDefault (_T (bareOption WindowStatusFormat))
+               , tmf $ saveDefault (_T (bareOption WindowStatusFormat))
                )
              , ( "#[range=window|#{window_index} foo]"
                , tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
