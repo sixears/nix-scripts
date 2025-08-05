@@ -1,9 +1,10 @@
 {-# LANGUAGE DataKinds         #-}
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms   #-}
 {-# LANGUAGE QuasiQuotes       #-}
--- {-# LANGUAGE UndecidableInstances     #-}
+{-# LANGUAGE TypeFamilies      #-}
 {-# LANGUAGE UnicodeSyntax     #-}
 {-# LANGUAGE ViewPatterns      #-}
 
@@ -72,8 +73,8 @@ import qualified Text.Printer  as P
 
 --------------------------------------------------------------------------------
 
-data SavedDefault -- = SavedDefault
-data UnsavedDefault -- = UnsavedDefault
+data SavedDefault deriving Show -- = SavedDefault
+data UnsavedDefault deriving Show -- = UnsavedDefault
 -- a Format is basically a newtype around Text, but used with
 -- SavedDefault or UnsavedDefault
 newtype Format α = Format { unFormat ∷ 𝕋 }
@@ -451,9 +452,7 @@ innerFormatSpecifier (BareText      _)      = 𝓝
 --------------------
 
 instance (Show α, ToFormat α, Printable α) => Printable (FormatSpecifier α) where
---  print (BareOption   t)           = print t
   print (BareVariable  t)           = print t
---  print (BareVariable t)           = print t
   print (ExpandTwice w_strftime _) = P.text $ [fmt|%T|] w_strftime
   print (MaxLen      len_spec   _) = P.text $ [fmt|%T|] len_spec
   print (ForEachWindow other current) =
@@ -486,23 +485,41 @@ bareOption = BareVariable
 
 ------------------------------------------------------------
 
-data TMuxFormatTyped α = (ToFormat α, IsVariable α) => TMFV α
-                       | (ToFormat α) => TMFY (Style α)
+class Empty α where
+  empty ∷ α
+
+instance Empty (TMuxFormatTyped StringVariable) where
+  empty = TMFV (StringVariableText "")
+
+------------------------------------------------------------
+
+data TMuxFormatTyped α = (Show α, ToFormat α, IsVariable α) => TMFV α
+                       | (Show α, ToFormat α) => TMFY (Style α)
                        | (Show α, ToFormat α, Printable α) =>
                            TMFS (FormatSpecifier α)
-                       | TMFF (Format α)
+                       | Show α => TMFF (Format α)
+                       | -- conditional
+                         TMFC BoolExpr (𝕄 (TMuxFormatTyped α))
+                                       (𝕄 (TMuxFormatTyped α))
+
+instance Show (TMuxFormatTyped α) where
+  show (TMFV v) = [fmt|TMFV: %w|] v
+  show (TMFY y) = [fmt|TMFY: %w|] y
+  show (TMFS s) = [fmt|TMFS: %w|] s
+  show (TMFF (Format f)) = [fmt|TMFF: %w|] f
 
 instance Printable (TMuxFormatTyped α) where
   print (TMFV v) = P.text ∘ unFormat $ toFormat v
   print (TMFY y) = P.text ∘ unFormat $ toFormat y
   print (TMFS s) = P.text ∘ unFormat $ toFormat s
   print (TMFF f) = P.text ∘ unFormat $ f
+  print (TMFC if_ then_ else_) =
+    let def_empty = \ case 𝓝 → ""
+                           𝓙 x → [fmt|%T|] x
+    in  P.text $ [fmt|#{?%T,%t,%t}|] (toFormat if_) (def_empty then_)
+                                                    (def_empty else_)
 
 data TMuxFormat = ∀ α . TMFT (TMuxFormatTyped α)
-{-
-                | ∀ α . (Show α, ToFormat α, Printable α) =>
-                        TMFS (FormatSpecifier α)
--}
                 | TMFB BoolExpr
                 | TMFL [TMuxFormat]
 
@@ -514,8 +531,29 @@ instance Printable TMuxFormat where
 class TMuxFormatable α where
   tmf ∷ α → TMuxFormat
 
-instance ToFormat α => TMuxFormatable (Style α) where
+instance (Show α, ToFormat α) => TMuxFormatable (Style α) where
   tmf = TMFT ∘ TMFY
+
+instance TMuxFormatable (TMuxFormatTyped α) where
+  tmf = TMFT
+
+class TMuxFormatTypedable α where
+  type TMuxFormatTypedableType α
+  tmft ∷ α → TMuxFormatTyped (TMuxFormatTypedableType α)
+
+instance (Show α, ToFormat α) => TMuxFormatTypedable (Style α) where
+  type TMuxFormatTypedableType (Style α) = α
+  tmft = TMFY
+
+instance (Show α, Printable α, ToFormat α) =>
+         TMuxFormatTypedable (FormatSpecifier α) where
+  type TMuxFormatTypedableType (FormatSpecifier α) = α
+  tmft = TMFS
+
+conditional2 ∷ (TMuxFormatTypedable α) =>
+               BoolExpr → Maybe α → Maybe α
+             → TMuxFormatTyped (TMuxFormatTypedableType α)
+conditional2 if_ then_ else_ = TMFC if_ (tmft ⊳ then_) (tmft ⊳ else_)
 
 {- This fails with:
 
@@ -546,7 +584,7 @@ instance (Show α, ToFormat α, Printable α) =>
          TMuxFormatable (FormatSpecifier α) where
   tmf = TMFT ∘ TMFS
 
-tmfv ∷ (ToFormat α, IsVariable α) => α → TMuxFormat
+tmfv ∷ (Show α, ToFormat α, IsVariable α) => α → TMuxFormat
 tmfv = TMFT ∘ TMFV
 
 {- requires UndecidableInstances -}
@@ -594,6 +632,15 @@ bare_foobie        = bareOption user_foobie
 bare_wname         ∷ FormatSpecifier FormatVariable
 bare_wname         = bareOption WindowName
 
+toF_SV             ∷ FormatSpecifier StyleVariable → 𝕋
+toF_SV             = toText ∘ toFormat @(FormatSpecifier StyleVariable)
+
+win_stat_last      = bareOption WindowStatusLastStyle
+
+win_last_style     = And (BVar WindowLastFlag)
+                         (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
+                                   (StyExp DefaultStyle))
+
 tests ∷ TestTree
 tests = localOption Never $
   let ts_ :: [(𝕋,Format SavedDefault)]
@@ -607,8 +654,6 @@ tests = localOption Never $
             toT ∷ ToFormat α => α -> 𝕋
             toT    = toText ∘ toFormat
             toT_   = toT @(FormatSpecifier 𝕋)
-            toF_SV ∷ FormatSpecifier StyleVariable → 𝕋
-            toF_SV = toText ∘ toFormat @(FormatSpecifier StyleVariable)
             ç      = T.intercalate ","
 
             {- if ⋀ ( (window-has-activity ∨ silence)
@@ -715,11 +760,10 @@ tests = localOption Never $
                                       (emptyStyle @() & listStyle ⊩ ListFocus)
                )
              , ("#{?window_end_flag,,#{window-status-separator}}"
-               , tmf @(FormatSpecifier StringVariable) $
-                   conditional @()
-                    (BVar WindowEndFlag) () (BareVariable WindowStatusSeparator)
+               , TMFT $ TMFC
+                    (BVar WindowEndFlag) 𝓝
+                    (𝓙 ∘ TMFS $ BareVariable WindowStatusSeparator)
                )
-
              , ( "#[push-default]#{T:window-status-format}#[pop-default]"
                , tmf $ saveDefault (_T (bareOption WindowStatusFormat))
                )
@@ -727,16 +771,13 @@ tests = localOption Never $
                , tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
                                    & stylePayload ⊩ (StyleText "foo")
                )
-
              , ( T.intercalate "," [ "#{&&:#{window_last_flag}"
                                    , "#{!=:#{E:window-status-last-style}"
                                    , "default}}"
                                    ]
-               , let win_stat_last =
-                       bareOption WindowStatusLastStyle
-                 in  TMFB (And (BVar WindowLastFlag)
-                              (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
-                                        (StyExp DefaultStyle)))
+               , TMFB (And (BVar WindowLastFlag)
+                           (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
+                                     (StyExp DefaultStyle)))
                )
              , ( T.intercalate "," [ "#{?#{&&:#{window_last_flag}"
                                    , "#{!=:#{E:window-status-last-style}"
@@ -747,13 +788,8 @@ tests = localOption Never $
                , let win_stat_last ∷ FormatSpecifier StyleVariable
                      win_stat_last =
                        bareOption WindowStatusLastStyle
-                     win_last_style =
-                       And (BVar WindowLastFlag)
-                           (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
-                                     (StyExp DefaultStyle))
-                 in  tmf @(FormatSpecifier 𝕋) $
-                       conditional (win_last_style∷BoolExpr)
-                                   (_E win_stat_last) ()
+                 in  tmf $ conditional2
+                            win_last_style (𝓙 $ _E win_stat_last) 𝓝
                )
              , ( "#{||:#{window_activity_flag},#{window_silence_flag}}"
                , TMFB $ Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag)
@@ -775,12 +811,11 @@ tests = localOption Never $
                   , "#{E:window-status-activity-style}"
                   , "}"
                   ]
-               , tmf @(FormatSpecifier 𝕋) $
-                   conditional
+               , tmf $ conditional2
                      (And (Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag))
                           (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ _E $ bareOption WindowStatusActivityStyle)
                                     (StyExp DefaultStyle)))
-                                    (_E $ bareOption WindowStatusActivityStyle) ()
+                                    (𝓙 ∘ _E $ bareOption WindowStatusActivityStyle) 𝓝
                )
              , ( "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
                , tmf $ show_window_bell_or_activity
