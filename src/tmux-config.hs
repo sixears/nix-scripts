@@ -900,10 +900,11 @@ tests = localOption Never $
                           , tmf $
                               ForEachWindow @(FormatSpecifier 𝕋)
                                 (BareText $ ю
-                                 [ toText ∘ toFormat $
+                                 [ toT ∘ tmf $
                                      emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
                                                 & stylePayload ⊩ StyleText(text_to_style)
-                                 , toText (saveDefault (_T $ bareOption WindowStatusFormat))
+                                 , toT ∘ tmf $
+                                     saveDefault (_T $ bareOption WindowStatusFormat)
                                  , toT ∘ tmf $ emptyStyle_ & rangeStyle   ⊩ RangeNone
                                                        & styleDefault ⊢ StyleDefault
                                  , toT ∘ tmf $
@@ -912,7 +913,7 @@ tests = localOption Never $
                                   ]
                                 )
                                 (BareText $
-                                   let text_to_style =
+                                   let text_to_style' =
                                          ю [ toText ∘ toFormat @(FormatSpecifier 𝕋) $
                                                conditional
                                                  (StrNotEq (StrTxt ∘ toF_SV $ _E $
@@ -933,18 +934,17 @@ tests = localOption Never $
                                                                        , toT $ show_window_bell_or_activity
                                            ]
 
-                                   in  ю [ toText ∘ toFormat $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ StyleText(text_to_style)
+                                   in  ю [ toT ∘ tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ StyleText(text_to_style')
                                          , toText $ saveDefault $ _T (bareOption WindowStatusCurrentFormat)
-                                         , toT @(Style ()) $
-                                             emptyStyle & rangeStyle   ⊩ RangeNone
-                                                        & styleDefault ⊢ StyleDefault
-                                                        & listStyle    ⊩ ListOn
-                                         , toT @(FormatSpecifier 𝕋) $
-                                             conditional @()
+                                         , toT ∘ tmf $
+                                             emptyStyle_ & rangeStyle   ⊩ RangeNone
+                                                         & styleDefault ⊢ StyleDefault
+                                                         & listStyle    ⊩ ListOn
+                                         , toT ∘ tmf $
+                                             conditional2
                                                (BVar WindowEndFlag)
-                                               ()
-                                               (BareVariable WindowStatusSeparator)
-
+                                               𝓝
+                                               (𝓙 WindowStatusSeparator)
                                      ]
                                 )
                           ]
