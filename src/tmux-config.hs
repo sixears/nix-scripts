@@ -917,13 +917,13 @@ tests = localOption Never $
                                   ])
                                 (toT ∘ tmf $
                                    let text_to_style' =
-                                         ю [ toText ∘ toFormat @(FormatSpecifier 𝕋) $
-                                               conditional
+--                                         ю [ toT ∘ tmf $ conditional2
+                                         toT ∘ tmf $ [ tmf $ conditional2
                                                  (StrNotEq (StrTxt ∘ toF_SV $ _E $
                                                               bareOption WindowStatusCurrentStyle)
                                                            (StyExp DefaultStyle))
-                                                 (_E $ bareOption WindowStatusCurrentStyle)
-                                                 (_E $ bareOption WindowStatusStyle)
+                                                 (𝓙 ∘ _E $ bareOption WindowStatusCurrentStyle)
+                                                 (𝓙 ∘ _E $ bareOption WindowStatusStyle)
                                            , let win_stat_last ∷ FormatSpecifier StyleVariable
                                                  win_stat_last =
                                                    bareOption WindowStatusLastStyle
@@ -931,10 +931,9 @@ tests = localOption Never $
                                                    And (BVar WindowLastFlag)
                                                        (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
                                                                  (StyExp DefaultStyle))
-                                             in  toT @(FormatSpecifier 𝕋) $
-                                                   conditional (win_last_style∷BoolExpr)
-                                                               (_E win_stat_last) ()
-                                                                       , toT $ show_window_bell_or_activity
+                                             in tmf $ conditional2
+                                                   win_last_style (𝓙 $ _E win_stat_last) 𝓝
+                                           , tmf $ show_window_bell_or_activity
                                            ]
 
                                    in   [ tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ StyleText(text_to_style')
