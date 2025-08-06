@@ -8,15 +8,9 @@
 {-# LANGUAGE UnicodeSyntax     #-}
 {-# LANGUAGE ViewPatterns      #-}
 
-{- ## look again at conditional.  Shouldn't it be something like
-   BoolExpr -> β -> β -> FormatSpecifier β?  What about empty things,
-   currently (); maybe our types can have a Empty constraint that infers a
-   empty ∷ α method?
--}
+{- ## conditional -> conditional2
 
-{- ## remove BareText ? -}
-
-{- ## look again at conditional.  Shouldn't it be something like
+   ## look again at conditional.  Shouldn't it be something like
    BoolExpr -> β -> β -> FormatSpecifier β?  What about empty things,
    currently (); maybe our types can have a Empty constraint that infers a
    empty ∷ α method?
@@ -24,7 +18,11 @@
 
 {- ## can we construct some class for "convert to TMuxFormat", such that all
       the conversions (constructors) are inferred from the type?
+
+   use tmf everywhere 'stead of TMF*
 -}
+
+{- ## remove BareText ? -}
 
 {- ## replace ForEachWindow with a version that uses TMuxFormat (x2) to avoid
       having BareText instance of FormatSpecifier.  Possibly requires, or
@@ -523,6 +521,12 @@ data TMuxFormat = ∀ α . TMFT (TMuxFormatTyped α)
                 | TMFB BoolExpr
                 | TMFL [TMuxFormat]
 
+instance Show TMuxFormat where
+  show (TMFT t) = "TMuxFormat: " ◇ show t
+
+instance ToFormat TMuxFormat where
+  toFormat t = Format $ toText t
+
 instance Printable TMuxFormat where
   print (TMFT t) = print t
   print (TMFB b) = P.text ∘ unFormat $ toFormat b
@@ -821,29 +825,28 @@ tests = localOption Never $
                , tmf $ show_window_bell_or_activity
                )
              , ( "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]"
-               , let text_to_style =
-                       ю [ toText ∘ toFormat @(FormatSpecifier 𝕋) $
-                             conditional
+               , let text_to_style ∷ [TMuxFormat] =
+                       [ tmf $
+                             conditional2
                                (StrNotEq (StrTxt ∘ toF_SV $ _E $
                                            bareOption WindowStatusCurrentStyle)
                                          (StyExp DefaultStyle))
-                               (_E $ bareOption WindowStatusCurrentStyle)
-                               (_E $ bareOption WindowStatusStyle)
+                               (𝓙 ∘ _E $ bareOption WindowStatusCurrentStyle)
+                               (𝓙 ∘ _E $ bareOption WindowStatusStyle)
 
-                         , toText ∘ toFormat @(FormatSpecifier 𝕋) $
-                             conditional
+                               , tmf $ conditional2
                                (And (BVar WindowLastFlag)
                                             (StrNotEq (StrTxt $ toF_SV $ _E $
                                                       bareOption
                                                         WindowStatusLastStyle)
                                                    (StyExp DefaultStyle)))
-                               (_E $ bareOption WindowStatusLastStyle)
-                               ()
-                         , toT $ show_window_bell_or_activity
+                               (𝓙 ∘ _E $ bareOption WindowStatusLastStyle)
+                               𝓝
+                         , tmf show_window_bell_or_activity
                          ]
                  in  tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
                                        & listStyle ⊩ ListFocus
-                                       & stylePayload ⊩ StyleText text_to_style
+                                       & stylePayload ⊩ text_to_style
                )
 
              , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
