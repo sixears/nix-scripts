@@ -606,6 +606,11 @@ instance (Show α, ToFormat α, Printable α) =>
          TMuxFormatable (FormatSpecifier α) where
   tmf = TMFT ∘ TMFS
 
+instance TMuxFormatable [TMuxFormat] where
+  tmf = TMFL
+
+--------------------
+
 tmfv ∷ (Show α, ToFormat α, IsVariable α) => α → TMuxFormat
 tmfv = TMFT ∘ TMFV
 
@@ -898,21 +903,19 @@ tests = localOption Never $
                               emptyStyle_ & listStyle ⊩ ListOn
 
                           , tmf $
-                              ForEachWindow @(FormatSpecifier 𝕋)
-                                (BareText $ ю
-                                 [ toT ∘ tmf $
+                              ForEachWindow
+                                (toT ∘ tmf $ [ tmf $
                                      emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
                                                 & stylePayload ⊩ StyleText(text_to_style)
-                                 , toT ∘ tmf $
+                                 , tmf $
                                      saveDefault (_T $ bareOption WindowStatusFormat)
-                                 , toT ∘ tmf $ emptyStyle_ & rangeStyle   ⊩ RangeNone
+                                 , tmf $ emptyStyle_ & rangeStyle   ⊩ RangeNone
                                                        & styleDefault ⊢ StyleDefault
-                                 , toT ∘ tmf $
+                                 , tmf $
                                      conditional2 (BVar WindowEndFlag)
                                                   𝓝 (𝓙 WindowStatusSeparator)
-                                  ]
-                                )
-                                (BareText $
+                                  ])
+                                (toT ∘ tmf $
                                    let text_to_style' =
                                          ю [ toText ∘ toFormat @(FormatSpecifier 𝕋) $
                                                conditional
@@ -934,13 +937,13 @@ tests = localOption Never $
                                                                        , toT $ show_window_bell_or_activity
                                            ]
 
-                                   in  ю [ toT ∘ tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ StyleText(text_to_style')
-                                         , toText $ saveDefault $ _T (bareOption WindowStatusCurrentFormat)
-                                         , toT ∘ tmf $
+                                   in   [ tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ StyleText(text_to_style')
+                                         , tmf $ saveDefault $ _T (bareOption WindowStatusCurrentFormat)
+                                         , tmf $
                                              emptyStyle_ & rangeStyle   ⊩ RangeNone
                                                          & styleDefault ⊢ StyleDefault
                                                          & listStyle    ⊩ ListOn
-                                         , toT ∘ tmf $
+                                         , tmf $
                                              conditional2
                                                (BVar WindowEndFlag)
                                                𝓝
