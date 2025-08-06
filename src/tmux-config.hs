@@ -360,8 +360,11 @@ listStyle = lens _listStyle (\ s a -> s { _listStyle = a })
 stylePayload ∷ Lens' (Style α) (𝕄 α)
 stylePayload = lens _stylePayload (\ s a -> s { _stylePayload = a })
 
-emptyStyle :: Style α
+emptyStyle ∷ Style α
 emptyStyle = Style NoStyleDefault 𝓝 𝓝 𝓝 𝓝
+
+emptyStyle_ ∷ Style () = emptyStyle
+
 
 instance Show α => Printable (Style α) where print s = P.string (show s)
 
@@ -747,12 +750,12 @@ tests = localOption Never $
                    , "#[range=right nolist align=right #{E:status-right-style}]"
                    ]
                , TMFL [ -- the @() is needed to specify the payload type
-                        tmf $ emptyStyle @() & rangeStyle   ⊩ RangeNone
-                                              & styleDefault ⊢ StyleDefault
-                      , tmf $ emptyStyle     & listStyle    ⊩ ListNone
-                                              & alignStyle   ⊩ AlignRight
-                                              & rangeStyle   ⊩ RangeRight
-                                              & stylePayload ⊩ status_right_style
+                        tmf $ emptyStyle_ & rangeStyle   ⊩ RangeNone
+                                          & styleDefault ⊢ StyleDefault
+                      , tmf $ emptyStyle  & listStyle    ⊩ ListNone
+                                          & alignStyle   ⊩ AlignRight
+                                          & rangeStyle   ⊩ RangeRight
+                                          & stylePayload ⊩ status_right_style
                       ]
                )
              , ( ю [ "#[push-default]"
@@ -762,22 +765,22 @@ tests = localOption Never $
                , tmf $ saveDefault (_T $ len_right_length status_right)
                )
              , ( "#[list=on align=#{status-justify}]"
-               , tmf $ emptyStyle @() & listStyle ⊩ ListOn
-                                       & alignStyle ⊩ AlignOpt StatusJustify
+               , tmf $ emptyStyle_ & listStyle ⊩ ListOn
+                                   & alignStyle ⊩ AlignOpt StatusJustify
                )
              , ( "#[list=left-marker]<"
-               , tmf $ emptyStyle @() & listStyle ⊩ ListLeftMarker "<"
+               , tmf $ emptyStyle_ & listStyle ⊩ ListLeftMarker "<"
                )
              , ( "#[list=right-marker]>"
-               , tmf $ emptyStyle @() & listStyle ⊩ ListRightMarker ">"
+               , tmf $ emptyStyle_ & listStyle ⊩ ListRightMarker ">"
                )
-             , ( "#[list=on]", tmf $ emptyStyle @() & listStyle ⊩ ListOn )
+             , ( "#[list=on]", tmf $ emptyStyle_ & listStyle ⊩ ListOn )
              , ( "#{W:#{status-left},#{status-right}}",
                  tmf $ ForEachWindow status_left status_right
                )
              , ( "#{W:#[list=on],#[list=focus]}",
-                 tmf $ ForEachWindow (emptyStyle @() & listStyle ⊩ ListOn)
-                                      (emptyStyle @() & listStyle ⊩ ListFocus)
+                 tmf $ ForEachWindow (emptyStyle_ & listStyle ⊩ ListOn)
+                                     (emptyStyle_ & listStyle ⊩ ListFocus)
                )
              , ("#{?window_end_flag,,#{window-status-separator}}"
                , TMFT $ TMFC
@@ -885,14 +888,14 @@ tests = localOption Never $
                          ]
 
                  in  TMFL [ tmf $
-                              emptyStyle @() & listStyle ⊩ ListOn
-                                         & alignStyle ⊩ AlignOpt StatusJustify
+                              emptyStyle_ & listStyle ⊩ ListOn
+                                          & alignStyle ⊩ AlignOpt StatusJustify
                           , tmf $
-                              emptyStyle @() & listStyle ⊩ ListLeftMarker "<"
+                              emptyStyle_ & listStyle ⊩ ListLeftMarker "<"
                           , tmf $
-                              emptyStyle @() & listStyle ⊩ ListRightMarker ">"
+                              emptyStyle_ & listStyle ⊩ ListRightMarker ">"
                           , tmf $
-                              emptyStyle @() & listStyle ⊩ ListOn
+                              emptyStyle_ & listStyle ⊩ ListOn
 
                           , tmf $
                               ForEachWindow @(FormatSpecifier 𝕋)
@@ -901,13 +904,8 @@ tests = localOption Never $
                                      emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
                                                 & stylePayload ⊩ StyleText(text_to_style)
                                  , toText (saveDefault (_T $ bareOption WindowStatusFormat))
-                                 , toT (emptyStyle @() & rangeStyle   ⊩ RangeNone
-                                                       & styleDefault ⊢ StyleDefault)
-{-
-                                 , toT_ (conditional (BVar WindowEndFlag)
-                                                    (StringVariableText "")
-                                                    (bareOption WindowStatusSeparator))
--}
+                                 , toT ∘ tmf $ emptyStyle_ & rangeStyle   ⊩ RangeNone
+                                                       & styleDefault ⊢ StyleDefault
                                  , toT ∘ tmf $
                                      conditional2 (BVar WindowEndFlag)
                                                   𝓝 (𝓙 WindowStatusSeparator)
