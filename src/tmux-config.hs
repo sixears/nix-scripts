@@ -668,6 +668,17 @@ win_last_style     = And (BVar WindowLastFlag)
                          (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
                                    (StyExp DefaultStyle))
 
+{- window-current-status-style, if that's not the default;
+   else window-status-style -}
+win_current_or_style ∷ TMuxFormatTyped StyleVariable
+win_current_or_style = conditional2
+                         (StrNotEq (StrTxt ∘ toF_SV $
+                                      _E $ bareOption WindowStatusCurrentStyle)
+                                   (StyExp DefaultStyle))
+                         (𝓙 ∘ _E $ bareOption WindowStatusCurrentStyle)
+                         (𝓙 ∘ _E $ bareOption WindowStatusStyle)
+
+
 tests ∷ TestTree
 tests = localOption Never $
   let ts_ :: [(𝕋,Format SavedDefault)]
@@ -850,24 +861,16 @@ tests = localOption Never $
                )
              , ( "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]"
                , let text_to_style ∷ [TMuxFormat] =
-                       [ tmf $
-                             conditional2
-                               (StrNotEq (StrTxt ∘ toF_SV $ _E $
-                                           bareOption WindowStatusCurrentStyle)
-                                         (StyExp DefaultStyle))
-                               (𝓙 ∘ _E $ bareOption WindowStatusCurrentStyle)
-                               (𝓙 ∘ _E $ bareOption WindowStatusStyle)
-
-                               , tmf $ conditional2
+                       [ tmf $ win_current_or_style
+                       , tmf $ conditional2
                                (And (BVar WindowLastFlag)
-                                            (StrNotEq (StrTxt $ toF_SV $ _E $
-                                                      bareOption
-                                                        WindowStatusLastStyle)
-                                                   (StyExp DefaultStyle)))
+                                    (StrNotEq (StrTxt ∘ toF_SV $
+                                                 _E $ bareOption WindowStatusLastStyle)
+                                              (StyExp DefaultStyle)))
                                (𝓙 ∘ _E $ bareOption WindowStatusLastStyle)
                                𝓝
-                         , tmf show_window_bell_or_activity
-                         ]
+                       , tmf show_window_bell_or_activity
+                       ]
                  in  tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
                                        & listStyle ⊩ ListFocus
                                        & stylePayload ⊩ text_to_style
@@ -916,38 +919,32 @@ tests = localOption Never $
                                                   𝓝 (𝓙 WindowStatusSeparator)
                                   ])
                                 (toT ∘ tmf $
-                                   let text_to_style' =
---                                         ю [ toT ∘ tmf $ conditional2
-                                         toT ∘ tmf $ [ tmf $ conditional2
-                                                 (StrNotEq (StrTxt ∘ toF_SV $ _E $
-                                                              bareOption WindowStatusCurrentStyle)
-                                                           (StyExp DefaultStyle))
-                                                 (𝓙 ∘ _E $ bareOption WindowStatusCurrentStyle)
-                                                 (𝓙 ∘ _E $ bareOption WindowStatusStyle)
-                                           , let win_stat_last ∷ FormatSpecifier StyleVariable
-                                                 win_stat_last =
-                                                   bareOption WindowStatusLastStyle
-                                                 win_last_style =
-                                                   And (BVar WindowLastFlag)
-                                                       (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
-                                                                 (StyExp DefaultStyle))
-                                             in tmf $ conditional2
-                                                   win_last_style (𝓙 $ _E win_stat_last) 𝓝
-                                           , tmf $ show_window_bell_or_activity
-                                           ]
+                                   let text_to_style' ∷ TMuxFormat =
+                                         tmf $ [ tmf $ win_current_or_style
+                                               , let win_stat_last ∷ FormatSpecifier StyleVariable
+                                                     win_stat_last =
+                                                       bareOption WindowStatusLastStyle
+                                                     win_last_style =
+                                                       And (BVar WindowLastFlag)
+                                                           (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
+                                                                     (StyExp DefaultStyle))
+                                                 in tmf $ conditional2
+                                                       win_last_style (𝓙 $ _E win_stat_last) 𝓝
+                                               , tmf $ show_window_bell_or_activity
+                                               ]
 
-                                   in   [ tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ StyleText(text_to_style')
-                                         , tmf $ saveDefault $ _T (bareOption WindowStatusCurrentFormat)
-                                         , tmf $
-                                             emptyStyle_ & rangeStyle   ⊩ RangeNone
-                                                         & styleDefault ⊢ StyleDefault
-                                                         & listStyle    ⊩ ListOn
-                                         , tmf $
-                                             conditional2
-                                               (BVar WindowEndFlag)
-                                               𝓝
-                                               (𝓙 WindowStatusSeparator)
-                                     ]
+                                   in  [ tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ text_to_style'
+                                       , tmf $ saveDefault $ _T (bareOption WindowStatusCurrentFormat)
+                                       , tmf $
+                                           emptyStyle_ & rangeStyle   ⊩ RangeNone
+                                                       & styleDefault ⊢ StyleDefault
+                                                       & listStyle    ⊩ ListOn
+                                       , tmf $
+                                           conditional2
+                                             (BVar WindowEndFlag)
+                                             𝓝
+                                             (𝓙 WindowStatusSeparator)
+                                       ]
                                 )
                           ]
                )
