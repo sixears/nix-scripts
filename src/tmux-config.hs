@@ -29,6 +29,8 @@
       would benefit from, removing the Show instance of FormatSpecifier.
 -}
 
+{- ## Do we still need StringVariableText? -}
+
 import Base1
 
 import Prelude  ( error )
@@ -256,8 +258,8 @@ instance Printable StringVariable where
   print WindowStatusSeparator  = "window-status-separator"
 
 instance ToFormat StringVariable where
-  toFormat WindowStatusSeparator = Format "window-status-separator"
   toFormat (StringVariableText t)  = Format t
+  toFormat v = Format $ [fmt|#{%T}|] v
 
 ------------------------------------------------------------
 
@@ -506,23 +508,32 @@ instance Show (TMuxFormatTyped α) where
   show (TMFS s) = [fmt|TMFS: %w|] s
   show (TMFF (Format f)) = [fmt|TMFF: %w|] f
 
+instance ToFormat (TMuxFormatTyped α) where
+  toFormat t = Format $ toText t
+
 instance Printable (TMuxFormatTyped α) where
   print (TMFV v) = P.text ∘ unFormat $ toFormat v
   print (TMFY y) = P.text ∘ unFormat $ toFormat y
   print (TMFS s) = P.text ∘ unFormat $ toFormat s
   print (TMFF f) = P.text ∘ unFormat $ f
   print (TMFC if_ then_ else_) =
-    let def_empty = \ case 𝓝 → ""
-                           𝓙 x → [fmt|%T|] x
+    let def_empty = \ case 𝓝   → ""
+                           𝓙 x → toText $ toFormat x
     in  P.text $ [fmt|#{?%T,%t,%t}|] (toFormat if_) (def_empty then_)
                                                     (def_empty else_)
+
+------------------------------------------------------------
 
 data TMuxFormat = ∀ α . TMFT (TMuxFormatTyped α)
                 | TMFB BoolExpr
                 | TMFL [TMuxFormat]
 
+--------------------
+
 instance Show TMuxFormat where
   show (TMFT t) = "TMuxFormat: " ◇ show t
+
+--------------------
 
 instance ToFormat TMuxFormat where
   toFormat t = Format $ toText t
@@ -553,6 +564,10 @@ instance (Show α, Printable α, ToFormat α) =>
          TMuxFormatTypedable (FormatSpecifier α) where
   type TMuxFormatTypedableType (FormatSpecifier α) = α
   tmft = TMFS
+
+instance TMuxFormatTypedable StringVariable where
+  type TMuxFormatTypedableType StringVariable = StringVariable
+  tmft = TMFV
 
 conditional2 ∷ (TMuxFormatTypedable α) =>
                BoolExpr → Maybe α → Maybe α
@@ -653,10 +668,11 @@ tests = localOption Never $
             left_style_status = emptyStyle & alignStyle   ⊩ AlignLeft
                                            & rangeStyle   ⊩ RangeLeft
                                            & stylePayload ⊩ status_left_style
-            toF ∷ ToFormat α => α -> Format SavedDefault
-            toF = noSaveDefault ∘ toFormat
-            toT ∷ ToFormat α => α -> 𝕋
+            toF    ∷ ToFormat α => α -> Format SavedDefault
+            toF    = noSaveDefault ∘ toFormat
+            toT    ∷ ToFormat α => α -> 𝕋
             toT    = toText ∘ toFormat
+            toT_   ∷ FormatSpecifier 𝕋 -> 𝕋
             toT_   = toT @(FormatSpecifier 𝕋)
             ç      = T.intercalate ","
 
@@ -887,9 +903,14 @@ tests = localOption Never $
                                  , toText (saveDefault (_T $ bareOption WindowStatusFormat))
                                  , toT (emptyStyle @() & rangeStyle   ⊩ RangeNone
                                                        & styleDefault ⊢ StyleDefault)
+{-
                                  , toT_ (conditional (BVar WindowEndFlag)
                                                     (StringVariableText "")
                                                     (bareOption WindowStatusSeparator))
+-}
+                                 , toT ∘ tmf $
+                                     conditional2 (BVar WindowEndFlag)
+                                                  𝓝 (𝓙 WindowStatusSeparator)
                                   ]
                                 )
                                 (BareText $
