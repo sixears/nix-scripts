@@ -400,7 +400,7 @@ instance Printable WithStrftime where
   print WithStrftime    = P.text "T"
   print WithoutStrftime = P.text "E"
 
---------------------
+------------------------------------------------------------
 
 class IsVariable α
 
@@ -409,6 +409,8 @@ instance IsVariable FormatVariable
 instance IsVariable StringVariable
 instance IsVariable StyleVariable
 instance IsVariable UserVariable
+
+------------------------------------------------------------
 
 {- A format specifier is a #{…} group -}
 data FormatSpecifier α = IsVariable α => BareVariable α
@@ -419,6 +421,8 @@ data FormatSpecifier α = IsVariable α => BareVariable α
                        -- XXX replace this with Format?
                        | BareText 𝕋
 
+--------------------
+
 instance Show α => Show (FormatSpecifier α) where
   show (BareVariable v)     = [fmt|IsVariable %w|] v
   show (ExpandTwice wsf v) = [fmt|ExpandTwice %w %w|] wsf v
@@ -427,7 +431,7 @@ instance Show α => Show (FormatSpecifier α) where
   show (Conditional a b c) = [fmt|Conditional %w %w %w|] a b c
   show (BareText v)        = [fmt|BareText %w|] v
 
-----------------------------------------
+------------------------------------------------------------
 
 conditional :: (ToFormat β, ToFormat γ) => BoolExpr → β → γ → FormatSpecifier α
 conditional a b c =
@@ -679,6 +683,18 @@ win_current_or_style = conditional2
                          (𝓙 ∘ _E $ bareOption WindowStatusStyle)
 
 
+{- if   windows-last-flag ∧ (window-status-last-style != default)
+   then window-status-last-style
+   else nothing-}
+window_status_last_style ∷ TMuxFormatTyped StyleVariable
+window_status_last_style =
+  let win_stat_last  = {- window-status-last-style, expanded for tmux -}
+                       _E $ bareOption WindowStatusLastStyle
+      win_last_style = And (BVar WindowLastFlag)
+                           (StrNotEq (StrTxt ∘ toF_SV $ win_stat_last)
+                                     (StyExp DefaultStyle))
+  in  conditional2 win_last_style (𝓙 win_stat_last) 𝓝
+
 tests ∷ TestTree
 tests = localOption Never $
   let ts_ :: [(𝕋,Format SavedDefault)]
@@ -824,11 +840,7 @@ tests = localOption Never $
                                    , "#{E:window-status-last-style}"
                                    , "}"
                                    ]
-               , let win_stat_last ∷ FormatSpecifier StyleVariable
-                     win_stat_last =
-                       bareOption WindowStatusLastStyle
-                 in  tmf $ conditional2
-                            win_last_style (𝓙 $ _E win_stat_last) 𝓝
+               , tmf $ window_status_last_style
                )
              , ( "#{||:#{window_activity_flag},#{window_silence_flag}}"
                , TMFB $ Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag)
@@ -862,13 +874,13 @@ tests = localOption Never $
              , ( "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]"
                , let text_to_style ∷ [TMuxFormat] =
                        [ tmf $ win_current_or_style
-                       , tmf $ conditional2
+                       , tmf $ {- conditional2
                                (And (BVar WindowLastFlag)
                                     (StrNotEq (StrTxt ∘ toF_SV $
                                                  _E $ bareOption WindowStatusLastStyle)
                                               (StyExp DefaultStyle)))
                                (𝓙 ∘ _E $ bareOption WindowStatusLastStyle)
-                               𝓝
+                               𝓝 -} window_status_last_style
                        , tmf show_window_bell_or_activity
                        ]
                  in  tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
@@ -921,15 +933,7 @@ tests = localOption Never $
                                 (toT ∘ tmf $
                                    let text_to_style' ∷ TMuxFormat =
                                          tmf $ [ tmf $ win_current_or_style
-                                               , let win_stat_last ∷ FormatSpecifier StyleVariable
-                                                     win_stat_last =
-                                                       bareOption WindowStatusLastStyle
-                                                     win_last_style =
-                                                       And (BVar WindowLastFlag)
-                                                           (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
-                                                                     (StyExp DefaultStyle))
-                                                 in tmf $ conditional2
-                                                       win_last_style (𝓙 $ _E win_stat_last) 𝓝
+                                               , tmf $ window_status_last_style
                                                , tmf $ show_window_bell_or_activity
                                                ]
 
