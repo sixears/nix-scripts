@@ -485,11 +485,6 @@ instance (Show α, ToFormat α, Printable α) => ToFormat (FormatSpecifier α) w
   toFormat (BareText   t) = Format t
   toFormat ofs            = toStackedFormat [] ofs
 
-bareOption ∷ IsVariable α => α → FormatSpecifier α
--- bareOption = BareOption ∘ Option
-bareOption = BareVariable
-
-
 ------------------------------------------------------------
 
 class Empty α where
@@ -631,7 +626,7 @@ main :: IO ()
 main = do
   say $ toFormat (emptyStyle & alignStyle   ⊩ AlignLeft
                              & rangeStyle   ⊩ RangeLeft
-                             & stylePayload ⊩ ExpandTwice @StyleVariable WithoutStrftime (bareOption StatusLeftStyle)
+                             & stylePayload ⊩ ExpandTwice @StyleVariable WithoutStrftime (BareVariable StatusLeftStyle)
                  )
 
 --------------------------------------------------------------------------------
@@ -640,6 +635,8 @@ main = do
 
 _E                 ∷ FormatSpecifier α → FormatSpecifier α
 _E                 = ExpandTwice WithoutStrftime
+_e                 ∷ IsVariable α => α → FormatSpecifier α
+_e                 = _E ∘ BareVariable
 _T                 ∷ FormatSpecifier α → FormatSpecifier α
 _T                 = ExpandTwice WithStrftime
 len3               ∷ FormatSpecifier α → FormatSpecifier α
@@ -649,24 +646,24 @@ len_left_length    = MaxLen $ OptLen StatusLeftLength
 len_right_length   ∷ FormatSpecifier α → FormatSpecifier α
 len_right_length   = MaxLen $ OptLen StatusRightLength
 status_left_style  ∷ FormatSpecifier StyleVariable
-status_left_style  = _E $ bareOption StatusLeftStyle
+status_left_style  = _e StatusLeftStyle
 status_right_style ∷ FormatSpecifier StyleVariable
-status_right_style = _E $ bareOption StatusRightStyle
+status_right_style = _e StatusRightStyle
 status_left        ∷ FormatSpecifier FormatVariable
-status_left        = bareOption StatusLeft
+status_left        = BareVariable StatusLeft
 status_right       ∷ FormatSpecifier FormatVariable
-status_right       = bareOption StatusRight
+status_right       = BareVariable StatusRight
 user_foobie        ∷ UserVariable
 user_foobie        = userVariable "@foobie"
 bare_foobie        ∷ FormatSpecifier UserVariable
-bare_foobie        = bareOption user_foobie
+bare_foobie        = BareVariable user_foobie
 bare_wname         ∷ FormatSpecifier FormatVariable
-bare_wname         = bareOption WindowName
+bare_wname         = BareVariable WindowName
 
 toF_SV             ∷ FormatSpecifier StyleVariable → 𝕋
 toF_SV             = toText ∘ toFormat @(FormatSpecifier StyleVariable)
 
-win_stat_last      = bareOption WindowStatusLastStyle
+win_stat_last      = BareVariable WindowStatusLastStyle
 
 win_last_style     = And (BVar WindowLastFlag)
                          (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_last)
@@ -677,10 +674,10 @@ win_last_style     = And (BVar WindowLastFlag)
 win_current_or_style ∷ TMuxFormatTyped StyleVariable
 win_current_or_style = conditional2
                          (StrNotEq (StrTxt ∘ toF_SV $
-                                      _E $ bareOption WindowStatusCurrentStyle)
+                                      _e WindowStatusCurrentStyle)
                                    (StyExp DefaultStyle))
-                         (𝓙 ∘ _E $ bareOption WindowStatusCurrentStyle)
-                         (𝓙 ∘ _E $ bareOption WindowStatusStyle)
+                         (𝓙 $ _e WindowStatusCurrentStyle)
+                         (𝓙 $ _e WindowStatusStyle)
 
 
 {- if   windows-last-flag ∧ (window-status-last-style != default)
@@ -689,7 +686,7 @@ win_current_or_style = conditional2
 window_status_last_style ∷ TMuxFormatTyped StyleVariable
 window_status_last_style =
   let win_stat_last  = {- window-status-last-style, expanded for tmux -}
-                       _E $ bareOption WindowStatusLastStyle
+                       _e WindowStatusLastStyle
       win_last_style = And (BVar WindowLastFlag)
                            (StrNotEq (StrTxt ∘ toF_SV $ win_stat_last)
                                      (StyExp DefaultStyle))
@@ -724,10 +721,10 @@ tests = localOption Never $
                      (StrNotEq
                         (StrTxt $
                            toText ∘ toFormat @(FormatSpecifier StyleVariable) $
-                             _E $ bareOption WindowStatusActivityStyle)
+                             _e WindowStatusActivityStyle)
                         (StyExp DefaultStyle))
                  )
-                 (_E $ bareOption WindowStatusActivityStyle)
+                 (_e WindowStatusActivityStyle)
                  ()
 
              {- if ⋀ ( window-has-bell
@@ -739,11 +736,11 @@ tests = localOption Never $
 
              conditional
                (let win_stat_bell =
-                      bareOption WindowStatusBellStyle
+                      BareVariable WindowStatusBellStyle
                 in  And (BVar WindowBellFlag)
                         (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_bell)
                                   (StyExp DefaultStyle)))
-               (_E $ bareOption WindowStatusBellStyle)
+               (_e WindowStatusBellStyle)
                show_window_activity
 
 
@@ -820,7 +817,7 @@ tests = localOption Never $
                     (𝓙 ∘ TMFS $ BareVariable WindowStatusSeparator)
                )
              , ( "#[push-default]#{T:window-status-format}#[pop-default]"
-               , tmf $ saveDefault (_T (bareOption WindowStatusFormat))
+               , tmf $ saveDefault (_T (BareVariable WindowStatusFormat))
                )
              , ( "#[range=window|#{window_index} foo]"
                , tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
@@ -852,7 +849,7 @@ tests = localOption Never $
                  , "default}}" ]
                , TMFB $
                    And (Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag))
-                       (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ _E $ bareOption WindowStatusActivityStyle)
+                       (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ _e WindowStatusActivityStyle)
                                  (StyExp DefaultStyle))
                )
              , (ç [ ç [ "#{?#{&&:#{||:#{window_activity_flag}"
@@ -864,9 +861,9 @@ tests = localOption Never $
                   ]
                , tmf $ conditional2
                      (And (Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag))
-                          (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ _E $ bareOption WindowStatusActivityStyle)
+                          (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ _e WindowStatusActivityStyle)
                                     (StyExp DefaultStyle)))
-                                    (𝓙 ∘ _E $ bareOption WindowStatusActivityStyle) 𝓝
+                                    (𝓙 $ _e WindowStatusActivityStyle) 𝓝
                )
              , ( "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
                , tmf $ show_window_bell_or_activity
@@ -884,14 +881,11 @@ tests = localOption Never $
 
              , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                    ]
-               , let text_to_style ∷ 𝕋 =
-                       ю [ toT (ExpandTwice WithoutStrftime
-                                            (bareOption WindowStatusStyle))
-                         , toText window_status_last_style
-                         , toText ∘ toF @(FormatSpecifier 𝕋) $
-                             show_window_bell_or_activity
-                         ]
-
+               , let text_to_style =
+                       toT $ tmf [ tmf (_e WindowStatusStyle)
+                                 , tmf window_status_last_style
+                                 , tmf show_window_bell_or_activity
+                                 ]
                  in  TMFL [ tmf $
                               emptyStyle_ & listStyle ⊩ ListOn
                                           & alignStyle ⊩ AlignOpt StatusJustify
@@ -906,9 +900,9 @@ tests = localOption Never $
                               ForEachWindow
                                 (toT ∘ tmf $ [ tmf $
                                      emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
-                                                & stylePayload ⊩ StyleText(text_to_style)
+                                                & stylePayload ⊩ text_to_style
                                  , tmf $
-                                     saveDefault (_T $ bareOption WindowStatusFormat)
+                                     saveDefault (_T $ BareVariable WindowStatusFormat)
                                  , tmf $ emptyStyle_ & rangeStyle   ⊩ RangeNone
                                                        & styleDefault ⊢ StyleDefault
                                  , tmf $
@@ -923,7 +917,7 @@ tests = localOption Never $
                                                ]
 
                                    in  [ tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ text_to_style'
-                                       , tmf $ saveDefault $ _T (bareOption WindowStatusCurrentFormat)
+                                       , tmf $ saveDefault $ _T (BareVariable WindowStatusCurrentFormat)
                                        , tmf $
                                            emptyStyle_ & rangeStyle   ⊩ RangeNone
                                                        & styleDefault ⊢ StyleDefault
