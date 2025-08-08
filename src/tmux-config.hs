@@ -661,11 +661,17 @@ _T                 = ExpandTwice WithStrftime
 {-| arrange a format thing within a style that puts it at the focus of a list;
     and triggers the 'Status' mouse key with that window ID (if clicked, and
     mouse events are enabled -}
-range_window_focus_style ∷ α → Style α
-range_window_focus_style payload =
+range_window_lfocus_y ∷ α → Style α
+range_window_lfocus_y payload =
   emptyStyle & rangeStyle   ⊩ RangeWindow WindowIndex
              & listStyle    ⊩ ListFocus
              & stylePayload ⊩ payload
+
+rangeNoneYDefY :: Style () =
+  emptyStyle_ & rangeStyle ⊩ RangeNone & styleDefault ⊢ StyleDefault
+
+listOn :: Style α → Style α
+listOn y = y & listStyle ⊩ ListOn
 
 len3               ∷ FormatSpecifier α → FormatSpecifier α
 len3               = MaxLen $ FixedLen 3
@@ -807,8 +813,7 @@ tests = localOption Never $
                    , "#[range=right nolist align=right #{E:status-right-style}]"
                    ]
                , TMFL [ -- the @() is needed to specify the payload type
-                        tmf $ emptyStyle_ & rangeStyle   ⊩ RangeNone
-                                          & styleDefault ⊢ StyleDefault
+                        tmf $ rangeNoneYDefY
                       , tmf $ emptyStyle  & listStyle    ⊩ ListNone
                                           & alignStyle   ⊩ AlignRight
                                           & rangeStyle   ⊩ RangeRight
@@ -902,7 +907,7 @@ tests = localOption Never $
                        , tmf window_status_last_style
                        , tmf show_window_bell_or_activity
                        ]
-                 in  tmf $ range_window_focus_style payload
+                 in  tmf $ range_window_lfocus_y payload
                )
 
              , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
@@ -928,30 +933,25 @@ tests = localOption Never $
                                                 & stylePayload ⊩ text_to_style
                                  , tmf $
                                      saveDefault (_T $ BareVariable WindowStatusFormat)
-                                 , tmf $ emptyStyle_ & rangeStyle   ⊩ RangeNone
-                                                       & styleDefault ⊢ StyleDefault
+                                 , tmf rangeNoneYDefY
                                  , tmf $
                                      conditional2 (BVar WindowEndFlag)
                                                   𝓝 (𝓙 WindowStatusSeparator)
                                   ])
                                 (toT ∘ tmf $
                                    let text_to_style' ∷ TMuxFormat =
-                                         tmf $ [ tmf $ win_current_or_style
-                                               , tmf $ window_status_last_style
-                                               , tmf $ show_window_bell_or_activity
+                                         tmf $ [ tmf win_current_or_style
+                                               , tmf window_status_last_style
+                                               , tmf show_window_bell_or_activity
                                                ]
 
-                                   in  [ tmf $ range_window_focus_style text_to_style'
+                                   in  [ tmf $ range_window_lfocus_y text_to_style'
                                        , tmf $ saveDefault $ _T (BareVariable WindowStatusCurrentFormat)
-                                       , tmf $
-                                           emptyStyle_ & rangeStyle   ⊩ RangeNone
-                                                       & styleDefault ⊢ StyleDefault
-                                                       & listStyle    ⊩ ListOn
+                                       , tmf $ rangeNoneYDefY & listOn
                                        , tmf $
                                            conditional2
                                              (BVar WindowEndFlag)
-                                             𝓝
-                                             (𝓙 WindowStatusSeparator)
+                                             𝓝 (𝓙 WindowStatusSeparator)
                                        ]
                                 )
                           ]
