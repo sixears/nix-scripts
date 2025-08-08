@@ -303,7 +303,16 @@ instance Printable Alignment where
 
 ------------------------------------------------------------
 
-data RangeStyle = RangeLeft | RangeRight | RangeNone
+data RangeStyle = {-| When a mouse event occurs in the range=left or range=right
+                      range, the  ‘StatusLeft’  and  ‘StatusRight’ key bindings
+                      are triggered. -}
+                  RangeLeft | RangeRight
+                | RangeNone
+                  {-| range=window|X is the range for a window.  This triggers
+                      the ‘Status’ mouse key with the target window given by the
+                      ‘X’ argument.  ‘X’ is a window index in the current
+                      session. The mouse_status_range format variable will be
+                      set to ‘window’. -}
                 | RangeWindow IntOption
   deriving Show
 
@@ -315,7 +324,16 @@ instance Printable RangeStyle where
 
 ------------------------------------------------------------
 
-data ListStyle = ListOn | ListFocus | ListLeftMarker 𝕋 | ListRightMarker 𝕋
+data ListStyle = {-| list=on marks the start of the list -}
+                 ListOn
+                 {-| list=focus is the part of the  list  that should be kept in
+                     focus if the entire list won't fit in the available space
+                     (typically the current window); -}
+               | ListFocus
+                 {-| list=left-marker and list=right-marker mark the text to be
+                     used to mark that text has been trimmed from the left or
+                     right of the list if there is not enough space.-}
+               | ListLeftMarker 𝕋 | ListRightMarker 𝕋
                | ListNone
   deriving Show
 
@@ -639,6 +657,16 @@ _e                 ∷ IsVariable α => α → FormatSpecifier α
 _e                 = _E ∘ BareVariable
 _T                 ∷ FormatSpecifier α → FormatSpecifier α
 _T                 = ExpandTwice WithStrftime
+
+{-| arrange a format thing within a style that puts it at the focus of a list;
+    and triggers the 'Status' mouse key with that window ID (if clicked, and
+    mouse events are enabled -}
+range_window_focus_style ∷ α → Style α
+range_window_focus_style payload =
+  emptyStyle & rangeStyle   ⊩ RangeWindow WindowIndex
+             & listStyle    ⊩ ListFocus
+             & stylePayload ⊩ payload
+
 len3               ∷ FormatSpecifier α → FormatSpecifier α
 len3               = MaxLen $ FixedLen 3
 len_left_length    ∷ FormatSpecifier α → FormatSpecifier α
@@ -869,23 +897,20 @@ tests = localOption Never $
                , tmf $ show_window_bell_or_activity
                )
              , ( "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]"
-               , let text_to_style ∷ [TMuxFormat] =
+               , let payload =
                        [ tmf win_current_or_style
                        , tmf window_status_last_style
                        , tmf show_window_bell_or_activity
                        ]
-                 in  tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
-                                       & listStyle ⊩ ListFocus
-                                       & stylePayload ⊩ text_to_style
+                 in  tmf $ range_window_focus_style payload
                )
 
              , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                    ]
-               , let text_to_style =
-                       toT $ tmf [ tmf (_e WindowStatusStyle)
-                                 , tmf window_status_last_style
-                                 , tmf show_window_bell_or_activity
-                                 ]
+               , let text_to_style = [ tmf (_e WindowStatusStyle)
+                                     , tmf window_status_last_style
+                                     , tmf show_window_bell_or_activity
+                                     ]
                  in  TMFL [ tmf $
                               emptyStyle_ & listStyle ⊩ ListOn
                                           & alignStyle ⊩ AlignOpt StatusJustify
@@ -916,7 +941,7 @@ tests = localOption Never $
                                                , tmf $ show_window_bell_or_activity
                                                ]
 
-                                   in  [ tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex & listStyle ⊩ ListFocus & stylePayload ⊩ text_to_style'
+                                   in  [ tmf $ range_window_focus_style text_to_style'
                                        , tmf $ saveDefault $ _T (BareVariable WindowStatusCurrentFormat)
                                        , tmf $
                                            emptyStyle_ & rangeStyle   ⊩ RangeNone
