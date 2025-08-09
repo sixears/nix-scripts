@@ -925,53 +925,49 @@ tests = localOption Never $
 
              , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                    ]
-               , let text_to_style = [ tmf (_e WindowStatusStyle)
-                                     , tmf window_status_last_style
-                                     , tmf show_window_bell_or_activity
-                                     ]
-                 in  TMFL [ tmf $
-                              ꝏ & listStyle ⊩ ListOn
-                                            & alignStyle ⊩ AlignOpt StatusJustify
-                          , tmf $
-                              ꝏ & listStyle ⊩ ListLeftMarker "<"
-                          , tmf $
-                              ꝏ & listStyle ⊩ ListRightMarker ">"
-                          , tmf $
-                              ꝏ & listStyle ⊩ ListOn
+               , TMFL [ tmf $
+                          ꝏ & listStyle ⊩ ListOn
+                                        & alignStyle ⊩ AlignOpt StatusJustify
+                      , tmf $
+                          ꝏ & listStyle ⊩ ListLeftMarker "<"
+                      , tmf $
+                          ꝏ & listStyle ⊩ ListRightMarker ">"
+                      , tmf $
+                          ꝏ & listStyle ⊩ ListOn
 
-                          , tmf $
-                              ForEachWindow
-                                (toT ∘ tmf $
-                                  [ tmf $
-                                      ð & rangeWinIY ≈
-                                            [ tmf (_e WindowStatusStyle)
-                                            , tmf window_status_last_style
-                                            , tmf show_window_bell_or_activity
-                                            ]
-                                 , tmf $
-                                     saveDefault (_t WindowStatusFormat)
-                                 , tmf rangeNoneYDefY
-                                 , tmf $
-                                     conditional2 (BVar WindowEndFlag)
-                                                  𝓝 (𝓙 WindowStatusSeparator)
-                                  ])
-                                (toT ∘ tmf $
-                                   let text_to_style' ∷ TMuxFormat =
-                                         tmf $ [ tmf win_current_or_style
-                                               , tmf window_status_last_style
-                                               , tmf show_window_bell_or_activity
-                                               ]
+                      , tmf $
+                          ForEachWindow
+                            (toT ∘ tmf $
+                              [ tmf $
+                                  ð & rangeWinIY ≈
+                                        [ tmf (_e WindowStatusStyle)
+                                        , tmf window_status_last_style
+                                        , tmf show_window_bell_or_activity
+                                        ]
+                             , tmf $
+                                 saveDefault (_t WindowStatusFormat)
+                             , tmf rangeNoneYDefY
+                             , tmf $
+                                 conditional2 (BVar WindowEndFlag)
+                                              𝓝 (𝓙 WindowStatusSeparator)
+                              ])
+                            (toT ∘ tmf $
+                               let text_to_style' ∷ TMuxFormat =
+                                     tmf $ [ tmf win_current_or_style
+                                           , tmf window_status_last_style
+                                           , tmf show_window_bell_or_activity
+                                           ]
 
-                                   in  [ tmf $ ð & rangeWinIY & listFocus ≈ text_to_style'
-                                       , tmf $ saveDefault $ _t WindowStatusCurrentFormat
-                                       , tmf $ rangeNoneYDefY & listOn
-                                       , tmf $
-                                           conditional2
-                                             (BVar WindowEndFlag)
-                                             𝓝 (𝓙 WindowStatusSeparator)
-                                       ]
-                                )
-                          ]
+                               in  [ tmf $ ð & rangeWinIY & listFocus ≈ text_to_style'
+                                   , tmf $ saveDefault $ _t WindowStatusCurrentFormat
+                                   , tmf $ rangeNoneYDefY & listOn
+                                   , tmf $
+                                       conditional2
+                                         (BVar WindowEndFlag)
+                                         𝓝 (𝓙 WindowStatusSeparator)
+                                   ]
+                            )
+                      ]
                )
              ])
 
