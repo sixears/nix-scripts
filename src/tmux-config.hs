@@ -31,6 +31,8 @@
 
 {- ## Do we still need StringVariableText? -}
 
+{- ## Do we still need emptyStyle (as opposed to emptyStyle_) ? -}
+
 import Base1
 
 import Prelude  ( error )
@@ -375,14 +377,18 @@ styleDefault = lens _styleDefault (\ s a -> s { _styleDefault = a })
 listStyle :: Lens' (Style α) (𝕄 ListStyle)
 listStyle = lens _listStyle (\ s a -> s { _listStyle = a })
 
-stylePayload ∷ Lens' (Style α) (𝕄 α)
+-- stylePayload ∷ Lens' (Style α) (𝕄 β)
 stylePayload = lens _stylePayload (\ s a -> s { _stylePayload = a })
+stylePayload_ ∷ Lens' (Style α) (𝕄 α)
+stylePayload_ = lens _stylePayload (\ s a -> s { _stylePayload = a })
+
+instance Default (Style α) where
+  def = Style NoStyleDefault 𝓝 𝓝 𝓝 𝓝
 
 emptyStyle ∷ Style α
 emptyStyle = Style NoStyleDefault 𝓝 𝓝 𝓝 𝓝
 
-emptyStyle_ ∷ Style () = emptyStyle
-
+ꝏ ∷ Style () = def
 
 instance Show α => Printable (Style α) where print s = P.string (show s)
 
@@ -391,7 +397,7 @@ instance ToFormat α => ToFormat (Style α) where
     let pieces = [ [fmt|%T|] ⊳ (s ⊣ rangeStyle)
                  , [fmt|%T|] ⊳ (s ⊣ listStyle)
                  , [fmt|%T|] ⊳ (s ⊣ alignStyle)
-                 , toText ∘ toFormat ⊳ (s ⊣ stylePayload)
+                 , toText ∘ toFormat ⊳ (s ⊣ stylePayload_)
                  , case s ⊣ styleDefault of
                      StyleDefault   → 𝓙 "default"
                      NoStyleDefault → 𝓝
@@ -642,7 +648,7 @@ instance TMuxFormatable UserVariable where
 
 main :: IO ()
 main = do
-  say $ toFormat (emptyStyle & alignStyle   ⊩ AlignLeft
+  say $ toFormat (def & alignStyle   ⊩ AlignLeft
                              & rangeStyle   ⊩ RangeLeft
                              & stylePayload ⊩ ExpandTwice @StyleVariable WithoutStrftime (BareVariable StatusLeftStyle)
                  )
@@ -657,21 +663,28 @@ _e                 ∷ IsVariable α => α → FormatSpecifier α
 _e                 = _E ∘ BareVariable
 _T                 ∷ FormatSpecifier α → FormatSpecifier α
 _T                 = ExpandTwice WithStrftime
+_t                 ∷ IsVariable α => α → FormatSpecifier α
+_t                 = _T ∘ BareVariable
 
-{-| arrange a format thing within a style that puts it at the focus of a list;
-    and triggers the 'Status' mouse key with that window ID (if clicked, and
-    mouse events are enabled -}
-range_window_lfocus_y ∷ α → Style α
-range_window_lfocus_y payload =
-  emptyStyle & rangeStyle   ⊩ RangeWindow WindowIndex
-             & listStyle    ⊩ ListFocus
-             & stylePayload ⊩ payload
+rangeWinIY ∷ Style α → Style α
+rangeWinIY = rangeStyle ⊩ RangeWindow WindowIndex
 
-rangeNoneYDefY :: Style () =
-  emptyStyle_ & rangeStyle ⊩ RangeNone & styleDefault ⊢ StyleDefault
+ð ∷ Default α => α
+ð = def
 
-listOn :: Style α → Style α
-listOn y = y & listStyle ⊩ ListOn
+rangeNoneYDefY ∷ Style () =
+  ꝏ & rangeStyle ⊩ RangeNone & styleDefault ⊢ StyleDefault
+
+listOn ∷ Style α → Style α
+listOn = listStyle ⊩ ListOn
+
+listFocus ∷ Style α → Style α
+listFocus = listStyle ⊩ ListFocus
+
+-- I originally chose infixl (weakly); but that causes tmf $ x & y ≈ z to not
+-- parse.  Using infixr fixes that!
+infixr 0 ≈
+a ≈ b = a & stylePayload ⊩ b
 
 len3               ∷ FormatSpecifier α → FormatSpecifier α
 len3               = MaxLen $ FixedLen 3
@@ -731,7 +744,7 @@ tests = localOption Never $
   let ts_ :: [(𝕋,Format SavedDefault)]
       ts_ =
         let left_style_status :: Style (FormatSpecifier StyleVariable)
-            left_style_status = emptyStyle & alignStyle   ⊩ AlignLeft
+            left_style_status = ð& alignStyle   ⊩ AlignLeft
                                            & rangeStyle   ⊩ RangeLeft
                                            & stylePayload ⊩ status_left_style
             toF    ∷ ToFormat α => α -> Format SavedDefault
@@ -814,7 +827,7 @@ tests = localOption Never $
                    ]
                , TMFL [ -- the @() is needed to specify the payload type
                         tmf $ rangeNoneYDefY
-                      , tmf $ emptyStyle  & listStyle    ⊩ ListNone
+                      , tmf $ ð & listStyle    ⊩ ListNone
                                           & alignStyle   ⊩ AlignRight
                                           & rangeStyle   ⊩ RangeRight
                                           & stylePayload ⊩ status_right_style
@@ -827,22 +840,22 @@ tests = localOption Never $
                , tmf $ saveDefault (_T $ len_right_length status_right)
                )
              , ( "#[list=on align=#{status-justify}]"
-               , tmf $ emptyStyle_ & listStyle ⊩ ListOn
+               , tmf $ ꝏ & listStyle ⊩ ListOn
                                    & alignStyle ⊩ AlignOpt StatusJustify
                )
              , ( "#[list=left-marker]<"
-               , tmf $ emptyStyle_ & listStyle ⊩ ListLeftMarker "<"
+               , tmf $ ꝏ & listStyle ⊩ ListLeftMarker "<"
                )
              , ( "#[list=right-marker]>"
-               , tmf $ emptyStyle_ & listStyle ⊩ ListRightMarker ">"
+               , tmf $ ꝏ & listStyle ⊩ ListRightMarker ">"
                )
-             , ( "#[list=on]", tmf $ emptyStyle_ & listStyle ⊩ ListOn )
+             , ( "#[list=on]", tmf $ ꝏ & listStyle ⊩ ListOn )
              , ( "#{W:#{status-left},#{status-right}}",
                  tmf $ ForEachWindow status_left status_right
                )
              , ( "#{W:#[list=on],#[list=focus]}",
-                 tmf $ ForEachWindow (emptyStyle_ & listStyle ⊩ ListOn)
-                                     (emptyStyle_ & listStyle ⊩ ListFocus)
+                 tmf $ ForEachWindow (ꝏ & listStyle ⊩ ListOn)
+                                     (ꝏ & listStyle ⊩ ListFocus)
                )
              , ("#{?window_end_flag,,#{window-status-separator}}"
                , TMFT $ TMFC
@@ -850,10 +863,10 @@ tests = localOption Never $
                     (𝓙 ∘ TMFS $ BareVariable WindowStatusSeparator)
                )
              , ( "#[push-default]#{T:window-status-format}#[pop-default]"
-               , tmf $ saveDefault (_T (BareVariable WindowStatusFormat))
+               , tmf $ saveDefault (_t WindowStatusFormat)
                )
              , ( "#[range=window|#{window_index} foo]"
-               , tmf $ emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
+               , tmf $ ð& rangeStyle ⊩ RangeWindow WindowIndex
                                    & stylePayload ⊩ (StyleText "foo")
                )
              , ( T.intercalate "," [ "#{&&:#{window_last_flag}"
@@ -907,7 +920,7 @@ tests = localOption Never $
                        , tmf window_status_last_style
                        , tmf show_window_bell_or_activity
                        ]
-                 in  tmf $ range_window_lfocus_y payload
+                 in  tmf $ ð & rangeWinIY & listFocus ≈ payload
                )
 
              , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
@@ -917,22 +930,26 @@ tests = localOption Never $
                                      , tmf show_window_bell_or_activity
                                      ]
                  in  TMFL [ tmf $
-                              emptyStyle_ & listStyle ⊩ ListOn
-                                          & alignStyle ⊩ AlignOpt StatusJustify
+                              ꝏ & listStyle ⊩ ListOn
+                                            & alignStyle ⊩ AlignOpt StatusJustify
                           , tmf $
-                              emptyStyle_ & listStyle ⊩ ListLeftMarker "<"
+                              ꝏ & listStyle ⊩ ListLeftMarker "<"
                           , tmf $
-                              emptyStyle_ & listStyle ⊩ ListRightMarker ">"
+                              ꝏ & listStyle ⊩ ListRightMarker ">"
                           , tmf $
-                              emptyStyle_ & listStyle ⊩ ListOn
+                              ꝏ & listStyle ⊩ ListOn
 
                           , tmf $
                               ForEachWindow
-                                (toT ∘ tmf $ [ tmf $
-                                     emptyStyle & rangeStyle ⊩ RangeWindow WindowIndex
-                                                & stylePayload ⊩ text_to_style
+                                (toT ∘ tmf $
+                                  [ tmf $
+                                      ð & rangeWinIY ≈
+                                            [ tmf (_e WindowStatusStyle)
+                                            , tmf window_status_last_style
+                                            , tmf show_window_bell_or_activity
+                                            ]
                                  , tmf $
-                                     saveDefault (_T $ BareVariable WindowStatusFormat)
+                                     saveDefault (_t WindowStatusFormat)
                                  , tmf rangeNoneYDefY
                                  , tmf $
                                      conditional2 (BVar WindowEndFlag)
@@ -945,8 +962,8 @@ tests = localOption Never $
                                                , tmf show_window_bell_or_activity
                                                ]
 
-                                   in  [ tmf $ range_window_lfocus_y text_to_style'
-                                       , tmf $ saveDefault $ _T (BareVariable WindowStatusCurrentFormat)
+                                   in  [ tmf $ ð & rangeWinIY & listFocus ≈ text_to_style'
+                                       , tmf $ saveDefault $ _t WindowStatusCurrentFormat
                                        , tmf $ rangeNoneYDefY & listOn
                                        , tmf $
                                            conditional2
