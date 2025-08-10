@@ -442,7 +442,6 @@ instance IsVariable UserVariable
 data FormatSpecifier α = IsVariable α => BareVariable α
                        | ExpandTwice WithStrftime (FormatSpecifier α)
                        | MaxLen LenSpec (FormatSpecifier α)
-                       | ForEachWindow α α
                        | Conditional 𝕋 𝕋 𝕋
                        -- XXX replace this with Format?
                        | BareText 𝕋
@@ -453,7 +452,6 @@ instance Show α => Show (FormatSpecifier α) where
   show (BareVariable v)     = [fmt|IsVariable %w|] v
   show (ExpandTwice wsf v) = [fmt|ExpandTwice %w %w|] wsf v
   show (MaxLen ls v)       = [fmt|MaxLen %w %w|] ls v
-  show (ForEachWindow v w) = [fmt|ForEachWindow %w %w|] v w
   show (Conditional a b c) = [fmt|Conditional %w %w %w|] a b c
   show (BareText v)        = [fmt|BareText %w|] v
 
@@ -478,7 +476,6 @@ innerFormatSpecifier (BareVariable   _)      = 𝓝
 -- innerFormatSpecifier (BareVariable  _)      = 𝓝
 innerFormatSpecifier (MaxLen        _  fs)  = 𝓙 fs
 innerFormatSpecifier (ExpandTwice   _  fs)  = 𝓙 fs
-innerFormatSpecifier (ForEachWindow _ _)    = 𝓝
 innerFormatSpecifier (Conditional   _ _ _)  = 𝓝
 innerFormatSpecifier (BareText      _)      = 𝓝
 
@@ -488,8 +485,6 @@ instance (Show α, ToFormat α, Printable α) => Printable (FormatSpecifier α) 
   print (BareVariable  t)           = print t
   print (ExpandTwice w_strftime _) = P.text $ [fmt|%T|] w_strftime
   print (MaxLen      len_spec   _) = P.text $ [fmt|%T|] len_spec
-  print (ForEachWindow other current) =
-    P.text $ [fmt|W:%T,%T|] (toFormat other) (toFormat current)
   print (Conditional condition ifthen ifelse) =
     P.text $ [fmt|?%T,%T,%T|]
                  condition (toFormat ifthen) (toFormat ifelse)
@@ -555,6 +550,7 @@ instance Printable (TMuxFormatTyped α) where
 data TMuxFormat = ∀ α . TMFT (TMuxFormatTyped α)
                 | TMFB BoolExpr
                 | TMFL [TMuxFormat]
+                | TMF_W TMuxFormat TMuxFormat -- W: (for each window)
 
 --------------------
 
@@ -570,6 +566,10 @@ instance Printable TMuxFormat where
   print (TMFT t) = print t
   print (TMFB b) = P.text ∘ unFormat $ toFormat b
   print (TMFL l) = P.text ∘ ю $ toText ⊳ l
+  print (TMF_W w w') = P.text $ [fmt|#{W:%T,%T}|] (toText w) (toText w')
+
+forEachWindow ∷ (TMuxFormatable α, TMuxFormatable β) => α → β → TMuxFormat
+forEachWindow w w' = TMF_W (tmf w) (tmf w')
 
 class TMuxFormatable α where
   tmf ∷ α → TMuxFormat
@@ -691,7 +691,6 @@ listAlignMark align l r = TMFL [ tmf $ ꝏ & listStyle ⊩ ListOn
                                , tmf $ ꝏ & listStyle ⊩ ListRightMarker r
                                , tmf $ ꝏ & listStyle ⊩ ListOn
                                ]
-
 
 -- I originally chose infixl (weakly); but that causes tmf $ x & y ≈ z to not
 -- parse.  Using infixr fixes that!
@@ -863,11 +862,13 @@ tests = localOption Never $
                )
              , ( "#[list=on]", tmf $ ꝏ & listStyle ⊩ ListOn )
              , ( "#{W:#{status-left},#{status-right}}",
-                 tmf $ ForEachWindow status_left status_right
+--                 tmf $ ForEachWindow status_left status_right
+--                 TMF_W (tmf status_left) (tmf status_right)
+                 forEachWindow status_left status_right
                )
              , ( "#{W:#[list=on],#[list=focus]}",
-                 tmf $ ForEachWindow (ꝏ & listStyle ⊩ ListOn)
-                                     (ꝏ & listStyle ⊩ ListFocus)
+                 forEachWindow (ꝏ & listStyle ⊩ ListOn)
+                               (ꝏ & listStyle ⊩ ListFocus)
                )
              , ("#{?window_end_flag,,#{window-status-separator}}"
                , TMFT $ TMFC
@@ -940,36 +941,29 @@ tests = localOption Never $
                , {-| the status line for each window, notably showing its
                      number, running program, and directory -}
                  TMFL [ listAlignMark (AlignOpt StatusJustify) "<" ">"
-                      , tmf $
-                          ForEachWindow
-                            (toT ∘ tmf $
-                              [ tmf $
+                      , forEachWindow
+                            ([ tmf $
                                   ð & rangeWinIY ≈
                                         [ tmf (_e WindowStatusStyle)
                                         , tmf window_status_last_style
                                         , tmf show_window_bell_or_activity
                                         ]
-                             , tmf $
-                                 saveDefault (_t WindowStatusFormat)
+                             , tmf $ saveDefault (_t WindowStatusFormat)
                              , tmf rangeNoneYDefY
-                             , tmf $
-                                 conditional2 (BVar WindowEndFlag)
-                                              𝓝 (𝓙 WindowStatusSeparator)
+                             , tmf $ conditional2 (BVar WindowEndFlag)
+                                                  𝓝 (𝓙 WindowStatusSeparator)
                               ])
-                            (toT ∘ tmf $
-                               [ tmf $ ð & rangeWinIY & listFocus
+                            ([ tmf $ ð & rangeWinIY & listFocus
                                      ≈ [ tmf win_current_or_style
                                        , tmf window_status_last_style
                                        , tmf show_window_bell_or_activity
                                        ]
-                               , tmf $
-                                   saveDefault $ _t WindowStatusCurrentFormat
-                               , tmf $ rangeNoneYDefY & listOn
-                               , tmf $
-                                   conditional2
-                                     (BVar WindowEndFlag)
-                                     𝓝 (𝓙 WindowStatusSeparator)
-                               ]
+                             , tmf $ saveDefault $ _t WindowStatusCurrentFormat
+                             , tmf $ rangeNoneYDefY & listOn
+                             , tmf $ conditional2
+                                       (BVar WindowEndFlag)
+                                       𝓝 (𝓙 WindowStatusSeparator)
+                             ]
                             )
                       ]
                )
