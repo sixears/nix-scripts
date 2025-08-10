@@ -266,15 +266,15 @@ instance ToFormat StringVariable where
 ------------------------------------------------------------
 
 {-| Tmux "options" that evaluate to an integer value -}
-data IntOption = StatusLeftLength | StatusRightLength | WindowIndex
+data IntVariable = StatusLeftLength | StatusRightLength | WindowIndex
   deriving Show
 
-instance Printable IntOption where
+instance Printable IntVariable where
   print StatusLeftLength  = P.text "status-left-length"
   print StatusRightLength = P.text "status-right-length"
   print WindowIndex       = P.text "window_index"
 
-instance ToFormat IntOption where
+instance ToFormat IntVariable where
   toFormat io = Format $ [fmt|#{%T}|] io
 
 ------------------------------------------------------------
@@ -284,17 +284,19 @@ newtype Option α = Option α
 
 ------------------------------------------------------------
 
-data AlignOption = StatusJustify deriving Show
+data AlignVariable = {-| Set the position of the window list in the status line:
+                         left, centre or right. centre puts the window list in
+                         the relative centre of the available free space;
+                         absolute-centre uses the centre of the entire
+                         horizontal space. -}
+                     StatusJustify deriving Show
 
-instance Printable AlignOption where
+instance Printable AlignVariable where
   print StatusJustify = P.text "status-justify"
-
--- instance ToFormat AlignOption where
---   toFormat ao = Format $ [fmt|#{%T}|] ao
 
 ------------------------------------------------------------
 
-data Alignment = AlignLeft | AlignRight | AlignCentre | AlignOpt AlignOption
+data Alignment = AlignLeft | AlignRight | AlignCentre | AlignOpt AlignVariable
   deriving Show
 
 instance Printable Alignment where
@@ -315,7 +317,7 @@ data RangeStyle = {-| When a mouse event occurs in the range=left or range=right
                       ‘X’ argument.  ‘X’ is a window index in the current
                       session. The mouse_status_range format variable will be
                       set to ‘window’. -}
-                | RangeWindow IntOption
+                | RangeWindow IntVariable
   deriving Show
 
 instance Printable RangeStyle where
@@ -407,7 +409,7 @@ instance ToFormat α => ToFormat (Style α) where
 
 ------------------------------------------------------------
 
-data LenSpec = FixedLen ℤ | OptLen IntOption
+data LenSpec = FixedLen ℤ | OptLen IntVariable
   deriving Show
 
 instance Printable LenSpec where
@@ -681,6 +683,16 @@ listOn = listStyle ⊩ ListOn
 listFocus ∷ Style α → Style α
 listFocus = listStyle ⊩ ListFocus
 
+  {-| align the list; if either end gets trimmed, mark it
+      as such -}
+listAlignMark align l r = TMFL [ tmf $ ꝏ & listStyle ⊩ ListOn
+                                         & alignStyle ⊩ align
+                               , tmf $ ꝏ & listStyle ⊩ ListLeftMarker l
+                               , tmf $ ꝏ & listStyle ⊩ ListRightMarker r
+                               , tmf $ ꝏ & listStyle ⊩ ListOn
+                               ]
+
+
 -- I originally chose infixl (weakly); but that causes tmf $ x & y ≈ z to not
 -- parse.  Using infixr fixes that!
 infixr 0 ≈
@@ -925,16 +937,9 @@ tests = localOption Never $
 
              , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
                    ]
-               , TMFL [ tmf $
-                          ꝏ & listStyle ⊩ ListOn
-                                        & alignStyle ⊩ AlignOpt StatusJustify
-                      , tmf $
-                          ꝏ & listStyle ⊩ ListLeftMarker "<"
-                      , tmf $
-                          ꝏ & listStyle ⊩ ListRightMarker ">"
-                      , tmf $
-                          ꝏ & listStyle ⊩ ListOn
-
+               , {-| the status line for each window, notably showing its
+                     number, running program, and directory -}
+                 TMFL [ listAlignMark (AlignOpt StatusJustify) "<" ">"
                       , tmf $
                           ForEachWindow
                             (toT ∘ tmf $
@@ -952,20 +957,19 @@ tests = localOption Never $
                                               𝓝 (𝓙 WindowStatusSeparator)
                               ])
                             (toT ∘ tmf $
-                               let text_to_style' ∷ TMuxFormat =
-                                     tmf $ [ tmf win_current_or_style
-                                           , tmf window_status_last_style
-                                           , tmf show_window_bell_or_activity
-                                           ]
-
-                               in  [ tmf $ ð & rangeWinIY & listFocus ≈ text_to_style'
-                                   , tmf $ saveDefault $ _t WindowStatusCurrentFormat
-                                   , tmf $ rangeNoneYDefY & listOn
-                                   , tmf $
-                                       conditional2
-                                         (BVar WindowEndFlag)
-                                         𝓝 (𝓙 WindowStatusSeparator)
-                                   ]
+                               [ tmf $ ð & rangeWinIY & listFocus
+                                     ≈ [ tmf win_current_or_style
+                                       , tmf window_status_last_style
+                                       , tmf show_window_bell_or_activity
+                                       ]
+                               , tmf $
+                                   saveDefault $ _t WindowStatusCurrentFormat
+                               , tmf $ rangeNoneYDefY & listOn
+                               , tmf $
+                                   conditional2
+                                     (BVar WindowEndFlag)
+                                     𝓝 (𝓙 WindowStatusSeparator)
+                               ]
                             )
                       ]
                )
