@@ -24,11 +24,6 @@
 
 {- ## remove BareText ? -}
 
-{- ## replace ForEachWindow with a version that uses TMuxFormat (x2) to avoid
-      having BareText instance of FormatSpecifier.  Possibly requires, or
-      would benefit from, removing the Show instance of FormatSpecifier.
--}
-
 {- ## Do we still need StringVariableText? -}
 
 {- ## Do we still need emptyStyle (as opposed to emptyStyle_) ? -}
@@ -442,7 +437,6 @@ instance IsVariable UserVariable
 data FormatSpecifier α = IsVariable α => BareVariable α
                        | ExpandTwice WithStrftime (FormatSpecifier α)
                        | MaxLen LenSpec (FormatSpecifier α)
-                       | Conditional 𝕋 𝕋 𝕋
                        -- XXX replace this with Format?
                        | BareText 𝕋
 
@@ -452,16 +446,9 @@ instance Show α => Show (FormatSpecifier α) where
   show (BareVariable v)     = [fmt|IsVariable %w|] v
   show (ExpandTwice wsf v) = [fmt|ExpandTwice %w %w|] wsf v
   show (MaxLen ls v)       = [fmt|MaxLen %w %w|] ls v
-  show (Conditional a b c) = [fmt|Conditional %w %w %w|] a b c
   show (BareText v)        = [fmt|BareText %w|] v
 
 ------------------------------------------------------------
-
-conditional :: (ToFormat β, ToFormat γ) => BoolExpr → β → γ → FormatSpecifier α
-conditional a b c =
-  Conditional (toText $ toFormat a) (toText $ toFormat b) (toText $ toFormat c)
-
-----------------------------------------
 
 stackRank ∷ FormatSpecifier α → Word8
 stackRank (ExpandTwice _ _) = 2
@@ -476,7 +463,6 @@ innerFormatSpecifier (BareVariable   _)      = 𝓝
 -- innerFormatSpecifier (BareVariable  _)      = 𝓝
 innerFormatSpecifier (MaxLen        _  fs)  = 𝓙 fs
 innerFormatSpecifier (ExpandTwice   _  fs)  = 𝓙 fs
-innerFormatSpecifier (Conditional   _ _ _)  = 𝓝
 innerFormatSpecifier (BareText      _)      = 𝓝
 
 --------------------
@@ -485,9 +471,6 @@ instance (Show α, ToFormat α, Printable α) => Printable (FormatSpecifier α) 
   print (BareVariable  t)           = print t
   print (ExpandTwice w_strftime _) = P.text $ [fmt|%T|] w_strftime
   print (MaxLen      len_spec   _) = P.text $ [fmt|%T|] len_spec
-  print (Conditional condition ifthen ifelse) =
-    P.text $ [fmt|?%T,%T,%T|]
-                 condition (toFormat ifthen) (toFormat ifelse)
   print (BareText  t)              = print $ "ZZZ" ◇ t
 
 --------------------
@@ -550,7 +533,15 @@ instance Printable (TMuxFormatTyped α) where
 data TMuxFormat = ∀ α . TMFT (TMuxFormatTyped α)
                 | TMFB BoolExpr
                 | TMFL [TMuxFormat]
-                | TMF_W TMuxFormat TMuxFormat -- W: (for each window)
+                | {-| ‘S:’, ‘W:’, ‘P:’ or ‘L:’ will loop over each session,
+                      window, pane or client  and  insert the format once for
+                      each.  For windows and panes, two comma-separated formats
+                      may be given: the second is used for the current window or
+                      active pane. -}
+                  TMF_W TMuxFormat (𝕄 TMuxFormat) -- W: (for each window)
+                | TMF_P TMuxFormat (𝕄 TMuxFormat) -- P: (for each pane)
+                | TMF_S TMuxFormat -- S: (for each session)
+                | TMF_L TMuxFormat -- L: (for each client)
 
 --------------------
 
@@ -566,10 +557,15 @@ instance Printable TMuxFormat where
   print (TMFT t) = print t
   print (TMFB b) = P.text ∘ unFormat $ toFormat b
   print (TMFL l) = P.text ∘ ю $ toText ⊳ l
-  print (TMF_W w w') = P.text $ [fmt|#{W:%T,%T}|] (toText w) (toText w')
+  print (TMF_W w 𝓝)      = P.text $ [fmt|#{W:%T}|] (toText w)
+  print (TMF_W w (𝓙 w')) = P.text $ [fmt|#{W:%T,%T}|] (toText w) (toText w')
+  print (TMF_P p 𝓝)      = P.text $ [fmt|#{P:%T}|] (toText p)
+  print (TMF_P p (𝓙 p')) = P.text $ [fmt|#{P:%T,%T}|] (toText p) (toText p')
+  print (TMF_S s)        = P.text $ [fmt|#{S:%T}|] (toText s)
+  print (TMF_L l)        = P.text $ [fmt|#{L:%T}|] (toText l)
 
-forEachWindow ∷ (TMuxFormatable α, TMuxFormatable β) => α → β → TMuxFormat
-forEachWindow w w' = TMF_W (tmf w) (tmf w')
+forEachWindow ∷ (TMuxFormatable α, TMuxFormatable β) => α → 𝕄 β → TMuxFormat
+forEachWindow w w' = TMF_W (tmf w) (tmf ⊳ w')
 
 class TMuxFormatable α where
   tmf ∷ α → TMuxFormat
@@ -596,6 +592,10 @@ instance (Show α, Printable α, ToFormat α) =>
 instance TMuxFormatTypedable StringVariable where
   type TMuxFormatTypedableType StringVariable = StringVariable
   tmft = TMFV
+
+instance TMuxFormatTypedable (TMuxFormatTyped α) where
+  type TMuxFormatTypedableType (TMuxFormatTyped α) = α
+  tmft = id
 
 conditional2 ∷ (TMuxFormatTypedable α) =>
                BoolExpr → Maybe α → Maybe α
@@ -750,6 +750,41 @@ window_status_last_style =
                                      (StyExp DefaultStyle))
   in  conditional2 win_last_style (𝓙 win_stat_last) 𝓝
 
+{- if ⋀ ( (window-has-activity ∨ silence)
+        , window-status-activity-style != default )
+   then window-status-activity-style
+   else nothing
+ -}
+showWindowActivity ∷ TMuxFormatTyped StyleVariable
+showWindowActivity =
+  conditional2
+    (And (Or (BVar WindowActivityFlag)
+             (BVar WindowSilenceFlag))
+         (StrNotEq
+            (StrTxt $
+               toText ∘ toFormat @(FormatSpecifier StyleVariable) $
+                 _e WindowStatusActivityStyle)
+            (StyExp DefaultStyle))
+     )
+     (𝓙 $ _e WindowStatusActivityStyle)
+     𝓝
+
+ {- if ⋀ ( window-has-bell
+         , window-status-bell-style != default )
+    then window-status-bell-style
+    else showWindowActivity
+  -}
+showWindowBellOrActivity ∷ TMuxFormatTyped StyleVariable =
+
+ conditional2
+   (let win_stat_bell =
+          BareVariable WindowStatusBellStyle
+    in  And (BVar WindowBellFlag)
+            (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_bell)
+                      (StyExp DefaultStyle)))
+   (𝓙 ∘ tmft $ _e WindowStatusBellStyle)
+   (𝓙 ∘ tmft $ showWindowActivity)
+
 tests ∷ TestTree
 tests = localOption Never $
   let ts_ :: [(𝕋,Format SavedDefault)]
@@ -765,42 +800,6 @@ tests = localOption Never $
             toT_   ∷ FormatSpecifier 𝕋 -> 𝕋
             toT_   = toT @(FormatSpecifier 𝕋)
             ç      = T.intercalate ","
-
-            {- if ⋀ ( (window-has-activity ∨ silence)
-                    , window-status-activity-style != default )
-               then window-status-activity-style
-               else nothing
-             -}
-            show_window_activity ∷ FormatSpecifier 𝕋 =
-
-              conditional
-                (And (Or (BVar WindowActivityFlag)
-                         (BVar WindowSilenceFlag))
-                     (StrNotEq
-                        (StrTxt $
-                           toText ∘ toFormat @(FormatSpecifier StyleVariable) $
-                             _e WindowStatusActivityStyle)
-                        (StyExp DefaultStyle))
-                 )
-                 (_e WindowStatusActivityStyle)
-                 ()
-
-             {- if ⋀ ( window-has-bell
-                     , window-status-bell-style != default )
-                then window-status-bell-style
-                else show_window_activity
-              -}
-            show_window_bell_or_activity ∷ FormatSpecifier 𝕋 =
-
-             conditional
-               (let win_stat_bell =
-                      BareVariable WindowStatusBellStyle
-                in  And (BVar WindowBellFlag)
-                        (StrNotEq (StrTxt ∘ toF_SV $ _E win_stat_bell)
-                                  (StyExp DefaultStyle)))
-               (_e WindowStatusBellStyle)
-               show_window_activity
-
 
         in  ((second (Format ∘ toText)) ⊳
              [ ( "#{window_name}", tmf WindowName )
@@ -864,11 +863,11 @@ tests = localOption Never $
              , ( "#{W:#{status-left},#{status-right}}",
 --                 tmf $ ForEachWindow status_left status_right
 --                 TMF_W (tmf status_left) (tmf status_right)
-                 forEachWindow status_left status_right
+                 forEachWindow status_left (𝓙 status_right)
                )
              , ( "#{W:#[list=on],#[list=focus]}",
                  forEachWindow (ꝏ & listStyle ⊩ ListOn)
-                               (ꝏ & listStyle ⊩ ListFocus)
+                               (𝓙 $ ꝏ & listStyle ⊩ ListFocus)
                )
              , ("#{?window_end_flag,,#{window-status-separator}}"
                , TMFT $ TMFC
@@ -925,13 +924,13 @@ tests = localOption Never $
                                     (𝓙 $ _e WindowStatusActivityStyle) 𝓝
                )
              , ( "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
-               , tmf $ show_window_bell_or_activity
+               , tmf $ showWindowBellOrActivity
                )
              , ( "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]"
                , let payload =
                        [ tmf win_current_or_style
                        , tmf window_status_last_style
-                       , tmf show_window_bell_or_activity
+                       , tmf showWindowBellOrActivity
                        ]
                  in  tmf $ ð & rangeWinIY & listFocus ≈ payload
                )
@@ -942,28 +941,30 @@ tests = localOption Never $
                      number, running program, and directory -}
                  TMFL [ listAlignMark (AlignOpt StatusJustify) "<" ">"
                       , forEachWindow
-                            ([ tmf $
-                                  ð & rangeWinIY ≈
-                                        [ tmf (_e WindowStatusStyle)
-                                        , tmf window_status_last_style
-                                        , tmf show_window_bell_or_activity
-                                        ]
-                             , tmf $ saveDefault (_t WindowStatusFormat)
-                             , tmf rangeNoneYDefY
-                             , tmf $ conditional2 (BVar WindowEndFlag)
-                                                  𝓝 (𝓙 WindowStatusSeparator)
-                              ])
-                            ([ tmf $ ð & rangeWinIY & listFocus
-                                     ≈ [ tmf win_current_or_style
+                            -- window format (not current window)
+                            [ tmf $
+                                 ð & rangeWinIY ≈
+                                       [ tmf (_e WindowStatusStyle)
                                        , tmf window_status_last_style
-                                       , tmf show_window_bell_or_activity
+                                       , tmf showWindowBellOrActivity
                                        ]
-                             , tmf $ saveDefault $ _t WindowStatusCurrentFormat
-                             , tmf $ rangeNoneYDefY & listOn
-                             , tmf $ conditional2
-                                       (BVar WindowEndFlag)
-                                       𝓝 (𝓙 WindowStatusSeparator)
-                             ]
+                            , tmf $ saveDefault (_t WindowStatusFormat)
+                            , tmf rangeNoneYDefY
+                            , tmf $ conditional2 (BVar WindowEndFlag)
+                                                 𝓝 (𝓙 WindowStatusSeparator)
+                            ]
+                            -- window format (current window)
+                            (𝓙 [ tmf $ ð & rangeWinIY & listFocus
+                                       ≈ [ tmf win_current_or_style
+                                         , tmf window_status_last_style
+                                         , tmf showWindowBellOrActivity
+                                         ]
+                               , tmf $ saveDefault$ _t WindowStatusCurrentFormat
+                               , tmf $ rangeNoneYDefY & listOn
+                               , tmf $ conditional2
+                                         (BVar WindowEndFlag)
+                                         𝓝 (𝓙 WindowStatusSeparator)
+                               ]
                             )
                       ]
                )
