@@ -8,14 +8,6 @@
 {-# LANGUAGE UnicodeSyntax     #-}
 {-# LANGUAGE ViewPatterns      #-}
 
-{- ## conditional -> conditional2
-
-   ## look again at conditional.  Shouldn't it be something like
-   BoolExpr -> β -> β -> FormatSpecifier β?  What about empty things,
-   currently (); maybe our types can have a Empty constraint that infers a
-   empty ∷ α method?
--}
-
 {- ## can we construct some class for "convert to TMuxFormat", such that all
       the conversions (constructors) are inferred from the type?
 
@@ -458,9 +450,7 @@ stackRank _                 = 0
 ----------------------------------------
 
 innerFormatSpecifier :: FormatSpecifier α → 𝕄 (FormatSpecifier α)
--- innerFormatSpecifier (BareOption    _)      = 𝓝
 innerFormatSpecifier (BareVariable   _)      = 𝓝
--- innerFormatSpecifier (BareVariable  _)      = 𝓝
 innerFormatSpecifier (MaxLen        _  fs)  = 𝓙 fs
 innerFormatSpecifier (ExpandTwice   _  fs)  = 𝓙 fs
 innerFormatSpecifier (BareText      _)      = 𝓝
@@ -485,7 +475,6 @@ toStackedFormat stack ofs =
                    stck → Format $ [fmt|#{%t:%T}|] (T.intercalate ";" stck) ofs
 
 instance (Show α, ToFormat α, Printable α) => ToFormat (FormatSpecifier α) where
---  toFormat (BareOption o) = Format $ [fmt|#{%T}|] o
   toFormat (BareText   t) = Format t
   toFormat ofs            = toStackedFormat [] ofs
 
@@ -597,10 +586,10 @@ instance TMuxFormatTypedable (TMuxFormatTyped α) where
   type TMuxFormatTypedableType (TMuxFormatTyped α) = α
   tmft = id
 
-conditional2 ∷ (TMuxFormatTypedable α) =>
-               BoolExpr → Maybe α → Maybe α
-             → TMuxFormatTyped (TMuxFormatTypedableType α)
-conditional2 if_ then_ else_ = TMFC if_ (tmft ⊳ then_) (tmft ⊳ else_)
+conditional ∷ (TMuxFormatTypedable α) =>
+              BoolExpr → Maybe α → Maybe α
+            → TMuxFormatTyped (TMuxFormatTypedableType α)
+conditional if_ then_ else_ = TMFC if_ (tmft ⊳ then_) (tmft ⊳ else_)
 
 {- This fails with:
 
@@ -730,13 +719,11 @@ win_last_style     = And (BVar WindowLastFlag)
 {- window-current-status-style, if that's not the default;
    else window-status-style -}
 win_current_or_style ∷ TMuxFormatTyped StyleVariable
-win_current_or_style = conditional2
-                         (StrNotEq (StrTxt ∘ toF_SV $
-                                      _e WindowStatusCurrentStyle)
-                                   (StyExp DefaultStyle))
-                         (𝓙 $ _e WindowStatusCurrentStyle)
-                         (𝓙 $ _e WindowStatusStyle)
-
+win_current_or_style = conditional (StrNotEq (StrTxt ∘ toF_SV $
+                                               _e WindowStatusCurrentStyle)
+                                             (StyExp DefaultStyle))
+                                   (𝓙 $ _e WindowStatusCurrentStyle)
+                                   (𝓙 $ _e WindowStatusStyle)
 
 {- if   windows-last-flag ∧ (window-status-last-style != default)
    then window-status-last-style
@@ -748,7 +735,7 @@ window_status_last_style =
       win_last_style = And (BVar WindowLastFlag)
                            (StrNotEq (StrTxt ∘ toF_SV $ win_stat_last)
                                      (StyExp DefaultStyle))
-  in  conditional2 win_last_style (𝓙 win_stat_last) 𝓝
+  in  conditional win_last_style (𝓙 win_stat_last) 𝓝
 
 {- if ⋀ ( (window-has-activity ∨ silence)
         , window-status-activity-style != default )
@@ -757,17 +744,15 @@ window_status_last_style =
  -}
 showWindowActivity ∷ TMuxFormatTyped StyleVariable
 showWindowActivity =
-  conditional2
-    (And (Or (BVar WindowActivityFlag)
-             (BVar WindowSilenceFlag))
-         (StrNotEq
-            (StrTxt $
-               toText ∘ toFormat @(FormatSpecifier StyleVariable) $
-                 _e WindowStatusActivityStyle)
-            (StyExp DefaultStyle))
-     )
-     (𝓙 $ _e WindowStatusActivityStyle)
-     𝓝
+  conditional (And (Or (BVar WindowActivityFlag)
+                       (BVar WindowSilenceFlag))
+                   (StrNotEq
+                      (StrTxt $
+                         toText ∘ toFormat @(FormatSpecifier StyleVariable) $
+                           _e WindowStatusActivityStyle)
+                      (StyExp DefaultStyle))
+               )
+               (𝓙 $ _e WindowStatusActivityStyle) 𝓝
 
  {- if ⋀ ( window-has-bell
          , window-status-bell-style != default )
@@ -775,8 +760,7 @@ showWindowActivity =
     else showWindowActivity
   -}
 showWindowBellOrActivity ∷ TMuxFormatTyped StyleVariable =
-
- conditional2
+ conditional
    (let win_stat_bell =
           BareVariable WindowStatusBellStyle
     in  And (BVar WindowBellFlag)
@@ -917,7 +901,7 @@ tests = localOption Never $
                   , "#{E:window-status-activity-style}"
                   , "}"
                   ]
-               , tmf $ conditional2
+               , tmf $ conditional
                      (And (Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag))
                           (StrNotEq (StrTxt $ toText ∘ toFormat @(FormatSpecifier StyleVariable) $ _e WindowStatusActivityStyle)
                                     (StyExp DefaultStyle)))
@@ -950,7 +934,7 @@ tests = localOption Never $
                                        ]
                             , tmf $ saveDefault (_t WindowStatusFormat)
                             , tmf rangeNoneYDefY
-                            , tmf $ conditional2 (BVar WindowEndFlag)
+                            , tmf $ conditional (BVar WindowEndFlag)
                                                  𝓝 (𝓙 WindowStatusSeparator)
                             ]
                             -- window format (current window)
@@ -961,7 +945,7 @@ tests = localOption Never $
                                          ]
                                , tmf $ saveDefault$ _t WindowStatusCurrentFormat
                                , tmf $ rangeNoneYDefY & listOn
-                               , tmf $ conditional2
+                               , tmf $ conditional
                                          (BVar WindowEndFlag)
                                          𝓝 (𝓙 WindowStatusSeparator)
                                ]
