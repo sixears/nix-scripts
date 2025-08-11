@@ -57,10 +57,10 @@ import qualified Text.Printer  as P
 
 ------------------------------------------------------------
 
-data SavedDefault deriving Show -- = SavedDefault
-data UnsavedDefault deriving Show -- = UnsavedDefault
+data SavedDefault   deriving Show
+data UnsavedDefault deriving Show
 -- a Format is basically a newtype around Text, but used with
--- SavedDefault or UnsavedDefault
+-- SavedDefault or UnsavedDefault as a phantom type
 newtype Format α = Format { unFormat ∷ 𝕋 }
 
 instance Printable (Format α) where
@@ -79,8 +79,7 @@ instance ToFormat α => ToFormat [α] where
   toFormat as = Format $ ю [ unFormat $ toFormat a | a ← as ]
 
 saveDefault ∷ ToFormat α => α → Format SavedDefault
-saveDefault f =
-  Format $ [fmt|#[push-default]%T#[pop-default]|] (toFormat f)
+saveDefault f = Format $ [fmt|#[push-default]%T#[pop-default]|] (toFormat f)
 
 ------------------------------------------------------------
 
@@ -169,27 +168,25 @@ instance ToFormat BooleanVariable where
 
 ------------------------------------------------------------
 
-data Variable = BoolVar BooleanVariable
+data Variable = BoolVar   BooleanVariable
               | FormatVar FormatVariable
-              | StyleVar StyleVariable
-              | UserVar UserVariable
+              | StyleVar  StyleVariable
+              | UserVar   UserVariable
               | StringVar StringVariable
   deriving Show
 
 instance Printable Variable where
   print (BoolVar   bv) = print bv
   print (FormatVar fv) = print fv
-  print (StringVar  sv) = print sv
+  print (StringVar sv) = print sv
   print (StyleVar  sv) = print sv
-  print (UserVar  sv) = print sv
+  print (UserVar   sv) = print sv
 
 instance ToFormat Variable where
   toFormat (BoolVar   bv) = Format $ [fmt|#{%T}|] bv
-  -- toFormat (FormatVar fv) = Format $ [fmt|#{%T}|] fv
   toFormat (FormatVar fv) = Format $ [fmt|toFormat FormatVar %w|] fv
   toFormat (StringVar sv) = Format $ [fmt|toFormat StringVar %w|] sv
   toFormat (StyleVar  sv) = Format $ [fmt|toFormat StyleVar %w|] sv
-  -- toFormat (UserVar   uv) = Format $ [fmt|#{%T}|] uv
   toFormat (UserVar   uv) = Format $ [fmt|toFormat UserVar %w|] uv
 
 ------------------------------------------------------------
@@ -241,7 +238,7 @@ data StringVariable = WindowStatusSeparator | WindowName  deriving Show
 
 instance Printable StringVariable where
   print WindowStatusSeparator  = "window-status-separator"
-  print WindowName             =  "window_name"
+  print WindowName             = "window_name"
 
 instance ToFormat StringVariable where
   toFormat v = Format $ [fmt|#{%T}|] v
@@ -525,15 +522,15 @@ data TMuxFormat = ∀ α . TMFT (TMuxFormatTyped α)
                       active pane. -}
                   TMF_W TMuxFormat (𝕄 TMuxFormat) -- W: (for each window)
                 | TMF_P TMuxFormat (𝕄 TMuxFormat) -- P: (for each pane)
-                | TMF_S TMuxFormat -- S: (for each session)
-                | TMF_L TMuxFormat -- L: (for each client)
+                | TMF_S TMuxFormat                -- S: (for each session)
+                | TMF_L TMuxFormat                -- L: (for each client)
 
 --------------------
 
 instance Show TMuxFormat where
-  show (TMFT t)  = "TMFT: " ◇ show t
-  show (TMFB t)  = "TMFB: " ◇ show t
-  show (TMFL ts) = "TMFL: [" ◇ intercalate ", " (show ⊳ ts) ◇ "]"
+  show (TMFT  t)    = "TMFT: "  ◇ show t
+  show (TMFB  t)    = "TMFB: "  ◇ show t
+  show (TMFL  ts)   = "TMFL: [" ◇ intercalate ", " (show ⊳ ts) ◇ "]"
   show (TMF_W x y)  = "TMF_W: " ◇ show x ◇ " " ◇ show y
   show (TMF_P x y)  = "TMF_P: " ◇ show x ◇ " " ◇ show y
   show (TMF_S x)    = "TMF_S: " ◇ show x
@@ -665,31 +662,31 @@ listAlignMark align l r = tmf [ tmf $ ꝏ & listStyle ⊩ ListOn
                               , tmf $ ꝏ & listStyle ⊩ ListOn
                               ]
 
-{- window-current-status-style, if that's not the default;
-   else window-status-style -}
+{-| window-current-status-style, if that's not the default;
+    else window-status-style -}
 windowCurrentStatusOrStyle ∷ TMuxFormatTyped StyleVariable
 windowCurrentStatusOrStyle =
   conditional (strNotEq (_e WindowStatusCurrentStyle) DefaultStyle)
               (𝓙 $ _e WindowStatusCurrentStyle)
               (𝓙 $ _e WindowStatusStyle)
 
-{- if   windows-last-flag ∧ (window-status-last-style != default)
-   then window-status-last-style
-   else nothing-}
+{-| if   windows-last-flag ∧ (window-status-last-style != default)
+    then window-status-last-style
+    else nothing-}
 windowStatusLastStyle ∷ TMuxFormatTyped StyleVariable
 windowStatusLastStyle =
   conditional (And (BVar WindowLastFlag)
                    (strNotEq (_e WindowStatusLastStyle) DefaultStyle))
               (𝓙 $ _e WindowStatusLastStyle) 𝓝
 
- {- if ⋀ ( window-has-bell
+{-| if ⋀ ( window-has-bell
          , window-status-bell-style != default )
     then window-status-bell-style
     else (if ⋀ ( (window-has-activity ∨ silence)
                  , window-status-activity-style != default )
           then window-status-activity-style
           else nothing)
-  -}
+ -}
 showWindowBellOrActivity ∷ TMuxFormatTyped StyleVariable
 showWindowBellOrActivity =
   let {- if ⋀ ( (window-has-activity ∨ silence)
@@ -704,9 +701,6 @@ showWindowBellOrActivity =
                          (strNotEq (_e WindowStatusActivityStyle) DefaultStyle)
                     )
                     (𝓙 $ _e WindowStatusActivityStyle) 𝓝
-
-
-
   in  conditional (And (BVar WindowBellFlag)
                        (strNotEq (_e WindowStatusBellStyle) DefaultStyle))
                   (𝓙 ∘ tmft $ _e WindowStatusBellStyle)
