@@ -14,8 +14,10 @@ import Prelude  ( error )
 
 -- base --------------------------------
 
-import Data.List   ( reverse, sortOn )
+import Data.List   ( intercalate, reverse, sortOn )
 import Data.Maybe  ( catMaybes )
+
+import Control.Lens.Lens  ( Lens )
 
 -- monadio-plus ------------------------
 
@@ -50,6 +52,11 @@ import qualified Text.Printer  as P
 
 --------------------------------------------------------------------------------
 
+ð ∷ Default α => α
+ð = def
+
+------------------------------------------------------------
+
 data SavedDefault deriving Show -- = SavedDefault
 data UnsavedDefault deriving Show -- = UnsavedDefault
 -- a Format is basically a newtype around Text, but used with
@@ -60,7 +67,7 @@ instance Printable (Format α) where
   print = P.text ∘ unFormat
 
 class ToFormat α where
-  toFormat :: α -> Format UnsavedDefault
+  toFormat :: α → Format UnsavedDefault
 
 instance ToFormat () where
   toFormat () = Format ""
@@ -71,14 +78,9 @@ instance ToFormat 𝕋 where
 instance ToFormat α => ToFormat [α] where
   toFormat as = Format $ ю [ unFormat $ toFormat a | a ← as ]
 
--- saveDefault ∷ Format UnsavedDefault → Format SavedDefault
--- saveDefault f = Format $ "#[push-default]" ⊕ toText f ⊕ "#[pop-default]"
-
 saveDefault ∷ ToFormat α => α → Format SavedDefault
-saveDefault f = Format $ "#[push-default]" ⊕ toText (toFormat f) ⊕ "#[pop-default]"
-
-noSaveDefault ∷ Format UnsavedDefault → Format SavedDefault
-noSaveDefault = Format ∘ unFormat
+saveDefault f =
+  Format $ [fmt|#[push-default]%T#[pop-default]|] (toFormat f)
 
 ------------------------------------------------------------
 
@@ -137,15 +139,14 @@ userVariable t                         = error $ "userVariable: '" ◇ T.unpack 
 ------------------------------------------------------------
 
 data FormatVariable = StatusLeft | StatusRight | WindowStatusCurrentFormat
-                    | WindowStatusFormat | WindowName
+                    | WindowStatusFormat
   deriving Show
 
 instance Printable FormatVariable where
-  print StatusLeft                = P.text "status-left"
-  print StatusRight               = P.text "status-right"
-  print WindowStatusFormat        = P.text "window-status-format"
-  print WindowStatusCurrentFormat = P.text "window-status-current-format"
-  print WindowName                = P.text "window_name"
+  print StatusLeft                = "status-left"
+  print StatusRight               = "status-right"
+  print WindowStatusFormat        = "window-status-format"
+  print WindowStatusCurrentFormat = "window-status-current-format"
 
 instance ToFormat FormatVariable where
   toFormat o = Format $ [fmt|#{%T}|] o
@@ -157,11 +158,11 @@ data BooleanVariable = WindowEndFlag | WindowLastFlag | WindowActivityFlag
   deriving Show
 
 instance Printable BooleanVariable where
-  print WindowEndFlag      = P.text "window_end_flag"
-  print WindowBellFlag     = P.text "window_bell_flag"
-  print WindowLastFlag     = P.text "window_last_flag"
-  print WindowActivityFlag = P.text "window_activity_flag"
-  print WindowSilenceFlag  = P.text "window_silence_flag"
+  print WindowEndFlag      = "window_end_flag"
+  print WindowBellFlag     = "window_bell_flag"
+  print WindowLastFlag     = "window_last_flag"
+  print WindowActivityFlag = "window_activity_flag"
+  print WindowSilenceFlag  = "window_silence_flag"
 
 instance ToFormat BooleanVariable where
   toFormat bv = Format $ [fmt|#{%T}|] bv
@@ -235,10 +236,12 @@ strNotEq a b = let toT ∷ ToFormat γ => γ → StringExpr
 
 ------------------------------------------------------------
 
-data StringVariable = WindowStatusSeparator deriving Show
+data StringVariable = WindowStatusSeparator | WindowName  deriving Show
+
 
 instance Printable StringVariable where
   print WindowStatusSeparator  = "window-status-separator"
+  print WindowName             =  "window_name"
 
 instance ToFormat StringVariable where
   toFormat v = Format $ [fmt|#{%T}|] v
@@ -250,9 +253,9 @@ data IntVariable = StatusLeftLength | StatusRightLength | WindowIndex
   deriving Show
 
 instance Printable IntVariable where
-  print StatusLeftLength  = P.text "status-left-length"
-  print StatusRightLength = P.text "status-right-length"
-  print WindowIndex       = P.text "window_index"
+  print StatusLeftLength  = "status-left-length"
+  print StatusRightLength = "status-right-length"
+  print WindowIndex       = "window_index"
 
 instance ToFormat IntVariable where
   toFormat io = Format $ [fmt|#{%T}|] io
@@ -272,7 +275,7 @@ data AlignVariable = {-| Set the position of the window list in the status line:
                      StatusJustify deriving Show
 
 instance Printable AlignVariable where
-  print StatusJustify = P.text "status-justify"
+  print StatusJustify = "status-justify"
 
 ------------------------------------------------------------
 
@@ -280,9 +283,9 @@ data Alignment = AlignLeft | AlignRight | AlignCentre | AlignOpt AlignVariable
   deriving Show
 
 instance Printable Alignment where
-  print AlignLeft     = P.text "align=left"
-  print AlignCentre   = P.text "align=centre"
-  print AlignRight    = P.text "align=right"
+  print AlignLeft     = "align=left"
+  print AlignCentre   = "align=centre"
+  print AlignRight    = "align=right"
   print (AlignOpt ao) = P.text $ [fmt|align=#{%T}|] ao
 
 ------------------------------------------------------------
@@ -301,9 +304,9 @@ data RangeStyle = {-| When a mouse event occurs in the range=left or range=right
   deriving Show
 
 instance Printable RangeStyle where
-  print RangeLeft        = P.text "range=left"
-  print RangeRight       = P.text "range=right"
-  print RangeNone        = P.text "norange"
+  print RangeLeft        = "range=left"
+  print RangeRight       = "range=right"
+  print RangeNone        = "norange"
   print (RangeWindow io) = P.text $ [fmt|range=window|%T|] (toFormat io)
 
 ------------------------------------------------------------
@@ -322,11 +325,11 @@ data ListStyle = {-| list=on marks the start of the list -}
   deriving Show
 
 instance Printable ListStyle where
-  print ListOn              = P.text "list=on"
-  print ListFocus           = P.text "list=focus"
-  print (ListLeftMarker _)  = P.text "list=left-marker"
-  print (ListRightMarker _) = P.text "list=right-marker"
-  print ListNone            = P.text "nolist"
+  print ListOn              = "list=on"
+  print ListFocus           = "list=focus"
+  print (ListLeftMarker _)  = "list=left-marker"
+  print (ListRightMarker _) = "list=right-marker"
+  print ListNone            = "nolist"
 
 listPayload ∷ ListStyle → 𝕄 𝕋
 listPayload ListOn              = 𝓝
@@ -348,26 +351,24 @@ data Style α = Style { _styleDefault ∷ StyleDefault
   deriving Show
 
 alignStyle :: Lens' (Style α) (𝕄 Alignment)
-alignStyle = lens _alignStyle (\ s a -> s { _alignStyle = a })
+alignStyle = lens _alignStyle (\ s a → s { _alignStyle = a })
 
 rangeStyle :: Lens' (Style α) (𝕄 RangeStyle)
-rangeStyle = lens _rangeStyle (\ s a -> s { _rangeStyle = a })
+rangeStyle = lens _rangeStyle (\ s a → s { _rangeStyle = a })
 
 styleDefault :: Lens' (Style α) StyleDefault
-styleDefault = lens _styleDefault (\ s a -> s { _styleDefault = a })
+styleDefault = lens _styleDefault (\ s a → s { _styleDefault = a })
 
 listStyle :: Lens' (Style α) (𝕄 ListStyle)
-listStyle = lens _listStyle (\ s a -> s { _listStyle = a })
+listStyle = lens _listStyle (\ s a → s { _listStyle = a })
 
--- stylePayload ∷ Lens' (Style α) (𝕄 β)
-stylePayload = lens _stylePayload (\ s a -> s { _stylePayload = a })
+stylePayload ∷ Lens (Style α) (Style β) (𝕄 α) (𝕄 β)
+stylePayload = lens _stylePayload (\ s a → s { _stylePayload = a })
 stylePayload_ ∷ Lens' (Style α) (𝕄 α)
-stylePayload_ = lens _stylePayload (\ s a -> s { _stylePayload = a })
+stylePayload_ = lens _stylePayload (\ s a → s { _stylePayload = a })
 
 instance Default (Style α) where
   def = Style NoStyleDefault 𝓝 𝓝 𝓝 𝓝
-
-ꝏ ∷ Style () = def
 
 instance Show α => Printable (Style α) where print s = P.string (show s)
 
@@ -383,6 +384,15 @@ instance ToFormat α => ToFormat (Style α) where
                  ]
         payload = "" ⧐ (s ⊣ listStyle ≫ listPayload)
     in  Format $ [fmt|#[%t]%t|] (T.intercalate " " $ catMaybes pieces) payload
+
+-- I originally chose infixl (weakly); but that causes tmf $ x & y ≈ z to not
+-- parse.  Using infixr fixes that!
+infixr 0 ≈
+(≈) ∷ Style α → β → Style β
+a ≈ b = a & stylePayload ⊩ b
+
+ꝏ ∷ Style ()
+ꝏ = def
 
 ------------------------------------------------------------
 
@@ -400,8 +410,8 @@ data WithStrftime = WithStrftime | WithoutStrftime deriving Show
 --------------------
 
 instance Printable WithStrftime where
-  print WithStrftime    = P.text "T"
-  print WithoutStrftime = P.text "E"
+  print WithStrftime    = "T"
+  print WithoutStrftime = "E"
 
 ------------------------------------------------------------
 
@@ -454,13 +464,22 @@ toStackedFormat ∷ (Printable α, ToFormat α, Show α) =>
                   [FormatSpecifier α] → FormatSpecifier α → Format β
 toStackedFormat stack ofs =
   case innerFormatSpecifier ofs of
-    𝓙 (  ifs) → toStackedFormat (ofs:stack) ifs
-    _          → case toText ⊳ reverse (sortOn stackRank stack) of
-                   []   → Format $ [fmt|#{%T}|] ofs
-                   stck → Format $ [fmt|#{%t:%T}|] (T.intercalate ";" stck) ofs
+    𝓙 ifs → toStackedFormat (ofs:stack) ifs
+    _     → case toText ⊳ reverse (sortOn stackRank stack) of
+              []   → Format $ [fmt|#{%T}|] ofs
+              stck → Format $ [fmt|#{%t:%T}|] (T.intercalate ";" stck) ofs
 
 instance (Show α, ToFormat α, Printable α) => ToFormat (FormatSpecifier α) where
   toFormat ofs            = toStackedFormat [] ofs
+
+_E ∷ FormatSpecifier α → FormatSpecifier α
+_E = ExpandTwice WithoutStrftime
+_e ∷ IsVariable α => α → FormatSpecifier α
+_e = _E ∘ BareVariable
+_T ∷ FormatSpecifier α → FormatSpecifier α
+_T = ExpandTwice WithStrftime
+_t ∷ IsVariable α => α → FormatSpecifier α
+_t = _T ∘ BareVariable
 
 ------------------------------------------------------------
 
@@ -474,10 +493,11 @@ data TMuxFormatTyped α = (Show α, ToFormat α, IsVariable α) => TMFV α
                                        (𝕄 (TMuxFormatTyped α))
 
 instance Show (TMuxFormatTyped α) where
-  show (TMFV v) = [fmt|TMFV: %w|] v
-  show (TMFY y) = [fmt|TMFY: %w|] y
-  show (TMFS s) = [fmt|TMFS: %w|] s
+  show (TMFV v)          = [fmt|TMFV: %w|] v
+  show (TMFY y)          = [fmt|TMFY: %w|] y
+  show (TMFS s)          = [fmt|TMFS: %w|] s
   show (TMFF (Format f)) = [fmt|TMFF: %w|] f
+  show (TMFC p t e)      = [fmt|TMFC: %w %w %w|] p t e
 
 instance ToFormat (TMuxFormatTyped α) where
   toFormat t = Format $ toText t
@@ -511,7 +531,13 @@ data TMuxFormat = ∀ α . TMFT (TMuxFormatTyped α)
 --------------------
 
 instance Show TMuxFormat where
-  show (TMFT t) = "TMuxFormat: " ◇ show t
+  show (TMFT t)  = "TMFT: " ◇ show t
+  show (TMFB t)  = "TMFB: " ◇ show t
+  show (TMFL ts) = "TMFL: [" ◇ intercalate ", " (show ⊳ ts) ◇ "]"
+  show (TMF_W x y)  = "TMF_W: " ◇ show x ◇ " " ◇ show y
+  show (TMF_P x y)  = "TMF_P: " ◇ show x ◇ " " ◇ show y
+  show (TMF_S x)    = "TMF_S: " ◇ show x
+  show (TMF_L x)    = "TMF_L: " ◇ show x
 
 --------------------
 
@@ -571,8 +597,8 @@ conditional if_ then_ else_ = TMFC if_ (tmft ⊳ then_) (tmft ⊳ else_)
 
 tmux-config.hs:525:17: error: [GHC-25897]
     • Couldn't match type ‘k’ with ‘*’
-      Expected: Format @{k} α -> TMuxFormatTyped α0
-        Actual: Format @{*} α0 -> TMuxFormatTyped α0
+      Expected: Format @{k} α → TMuxFormatTyped α0
+        Actual: Format @{*} α0 → TMuxFormatTyped α0
       ‘k’ is a rigid type variable bound by
         the instance declaration
         at tmux-config.hs:524:10-34
@@ -580,7 +606,7 @@ tmux-config.hs:525:17: error: [GHC-25897]
       In the expression: TMFT ∘ TMFF
       In an equation for ‘tmf’: tmf = TMFT ∘ TMFF
     • Relevant bindings include
-        tmf :: Format α -> TMuxFormat (bound at tmux-config.hs:525:4)
+        tmf :: Format α → TMuxFormat (bound at tmux-config.hs:525:4)
 
 instance TMuxFormatable (Format α) where
    tmf = TMFT ∘ TMFF
@@ -614,6 +640,78 @@ instance TMuxFormatable FormatVariable where
 instance TMuxFormatable UserVariable where
   tmf = tmfv
 
+------------------------------------------------------------
+--             miscellaneous building blocks              --
+------------------------------------------------------------
+
+rangeWinIY ∷ Style α → Style α
+rangeWinIY = rangeStyle ⊩ RangeWindow WindowIndex
+
+rangeNoneYDefY ∷ Style ()
+rangeNoneYDefY = ꝏ & rangeStyle ⊩ RangeNone & styleDefault ⊢ StyleDefault
+
+listOn ∷ Style α → Style α
+listOn = listStyle ⊩ ListOn
+
+listFocus ∷ Style α → Style α
+listFocus = listStyle ⊩ ListFocus
+
+{-| align the list; if either end gets trimmed, mark it as such -}
+listAlignMark ∷ Alignment → 𝕋 → 𝕋 → TMuxFormat
+listAlignMark align l r = tmf [ tmf $ ꝏ & listStyle ⊩ ListOn
+                                        & alignStyle ⊩ align
+                              , tmf $ ꝏ & listStyle ⊩ ListLeftMarker l
+                              , tmf $ ꝏ & listStyle ⊩ ListRightMarker r
+                              , tmf $ ꝏ & listStyle ⊩ ListOn
+                              ]
+
+{- window-current-status-style, if that's not the default;
+   else window-status-style -}
+windowCurrentStatusOrStyle ∷ TMuxFormatTyped StyleVariable
+windowCurrentStatusOrStyle =
+  conditional (strNotEq (_e WindowStatusCurrentStyle) DefaultStyle)
+              (𝓙 $ _e WindowStatusCurrentStyle)
+              (𝓙 $ _e WindowStatusStyle)
+
+{- if   windows-last-flag ∧ (window-status-last-style != default)
+   then window-status-last-style
+   else nothing-}
+windowStatusLastStyle ∷ TMuxFormatTyped StyleVariable
+windowStatusLastStyle =
+  conditional (And (BVar WindowLastFlag)
+                   (strNotEq (_e WindowStatusLastStyle) DefaultStyle))
+              (𝓙 $ _e WindowStatusLastStyle) 𝓝
+
+ {- if ⋀ ( window-has-bell
+         , window-status-bell-style != default )
+    then window-status-bell-style
+    else (if ⋀ ( (window-has-activity ∨ silence)
+                 , window-status-activity-style != default )
+          then window-status-activity-style
+          else nothing)
+  -}
+showWindowBellOrActivity ∷ TMuxFormatTyped StyleVariable
+showWindowBellOrActivity =
+  let {- if ⋀ ( (window-has-activity ∨ silence)
+              , window-status-activity-style != default )
+         then window-status-activity-style
+         else nothing
+       -}
+      show_window_activity ∷ TMuxFormatTyped StyleVariable
+      show_window_activity =
+        conditional (And (Or (BVar WindowActivityFlag)
+                             (BVar WindowSilenceFlag))
+                         (strNotEq (_e WindowStatusActivityStyle) DefaultStyle)
+                    )
+                    (𝓙 $ _e WindowStatusActivityStyle) 𝓝
+
+
+
+  in  conditional (And (BVar WindowBellFlag)
+                       (strNotEq (_e WindowStatusBellStyle) DefaultStyle))
+                  (𝓙 ∘ tmft $ _e WindowStatusBellStyle)
+                  (𝓙 ∘ tmft $ show_window_activity)
+
 -- main ------------------------------------------------------------------------
 
 main :: IO ()
@@ -627,290 +725,194 @@ main = do
 --                                   tests                                    --
 --------------------------------------------------------------------------------
 
-_E                 ∷ FormatSpecifier α → FormatSpecifier α
-_E                 = ExpandTwice WithoutStrftime
-_e                 ∷ IsVariable α => α → FormatSpecifier α
-_e                 = _E ∘ BareVariable
-_T                 ∷ FormatSpecifier α → FormatSpecifier α
-_T                 = ExpandTwice WithStrftime
-_t                 ∷ IsVariable α => α → FormatSpecifier α
-_t                 = _T ∘ BareVariable
-
-rangeWinIY ∷ Style α → Style α
-rangeWinIY = rangeStyle ⊩ RangeWindow WindowIndex
-
-ð ∷ Default α => α
-ð = def
-
-rangeNoneYDefY ∷ Style () =
-  ꝏ & rangeStyle ⊩ RangeNone & styleDefault ⊢ StyleDefault
-
-listOn ∷ Style α → Style α
-listOn = listStyle ⊩ ListOn
-
-listFocus ∷ Style α → Style α
-listFocus = listStyle ⊩ ListFocus
-
-  {-| align the list; if either end gets trimmed, mark it
-      as such -}
-listAlignMark align l r = tmf [ tmf $ ꝏ & listStyle ⊩ ListOn
-                                         & alignStyle ⊩ align
-                               , tmf $ ꝏ & listStyle ⊩ ListLeftMarker l
-                               , tmf $ ꝏ & listStyle ⊩ ListRightMarker r
-                               , tmf $ ꝏ & listStyle ⊩ ListOn
-                               ]
-
--- I originally chose infixl (weakly); but that causes tmf $ x & y ≈ z to not
--- parse.  Using infixr fixes that!
-infixr 0 ≈
-a ≈ b = a & stylePayload ⊩ b
-
-len3               ∷ FormatSpecifier α → FormatSpecifier α
-len3               = MaxLen $ FixedLen 3
-len_left_length    ∷ FormatSpecifier α → FormatSpecifier α
-len_left_length    = MaxLen $ OptLen StatusLeftLength
-len_right_length   ∷ FormatSpecifier α → FormatSpecifier α
-len_right_length   = MaxLen $ OptLen StatusRightLength
-status_left_style  ∷ FormatSpecifier StyleVariable
-status_left_style  = _e StatusLeftStyle
-status_right_style ∷ FormatSpecifier StyleVariable
-status_right_style = _e StatusRightStyle
-status_left        ∷ FormatSpecifier FormatVariable
-status_left        = BareVariable StatusLeft
-status_right       ∷ FormatSpecifier FormatVariable
-status_right       = BareVariable StatusRight
-user_foobie        ∷ UserVariable
-user_foobie        = userVariable "@foobie"
-bare_foobie        ∷ FormatSpecifier UserVariable
-bare_foobie        = BareVariable user_foobie
-bare_wname         ∷ FormatSpecifier FormatVariable
-bare_wname         = BareVariable WindowName
-
-toF_SV             ∷ FormatSpecifier StyleVariable → 𝕋
-toF_SV             = toText ∘ toFormat @(FormatSpecifier StyleVariable)
-
-win_last_style     = And (BVar WindowLastFlag)
-                         (strNotEq (_e WindowStatusLastStyle) DefaultStyle)
-
-{- window-current-status-style, if that's not the default;
-   else window-status-style -}
-win_current_or_style ∷ TMuxFormatTyped StyleVariable
-win_current_or_style =
-  conditional (strNotEq (_e WindowStatusCurrentStyle) DefaultStyle)
-              (𝓙 $ _e WindowStatusCurrentStyle)
-              (𝓙 $ _e WindowStatusStyle)
-
-{- if   windows-last-flag ∧ (window-status-last-style != default)
-   then window-status-last-style
-   else nothing-}
-window_status_last_style ∷ TMuxFormatTyped StyleVariable
-window_status_last_style =
-  let win_last_style = And (BVar WindowLastFlag)
-                           (strNotEq (_e WindowStatusLastStyle) DefaultStyle)
-  in  conditional win_last_style (𝓙 $ _e WindowStatusLastStyle) 𝓝
-
-{- if ⋀ ( (window-has-activity ∨ silence)
-        , window-status-activity-style != default )
-   then window-status-activity-style
-   else nothing
- -}
-showWindowActivity ∷ TMuxFormatTyped StyleVariable
-showWindowActivity =
-  conditional (And (Or (BVar WindowActivityFlag)
-                       (BVar WindowSilenceFlag))
-                   (strNotEq (_e WindowStatusActivityStyle) DefaultStyle)
-              )
-              (𝓙 $ _e WindowStatusActivityStyle) 𝓝
-
- {- if ⋀ ( window-has-bell
-         , window-status-bell-style != default )
-    then window-status-bell-style
-    else showWindowActivity
-  -}
-showWindowBellOrActivity ∷ TMuxFormatTyped StyleVariable =
- conditional (And (BVar WindowBellFlag)
-                  (strNotEq (_e WindowStatusBellStyle) DefaultStyle))
-             (𝓙 ∘ tmft $ _e WindowStatusBellStyle)
-             (𝓙 ∘ tmft $ showWindowActivity)
-
 tests ∷ TestTree
 tests = localOption Never $
-  let ts_ :: [(𝕋,Format SavedDefault)]
+  let ç      = T.intercalate ","
+
+      len3               ∷ FormatSpecifier α → FormatSpecifier α
+      len3               = MaxLen $ FixedLen 3
+      len_left_length    ∷ FormatSpecifier α → FormatSpecifier α
+      len_left_length    = MaxLen $ OptLen StatusLeftLength
+      len_right_length   ∷ FormatSpecifier α → FormatSpecifier α
+      len_right_length   = MaxLen $ OptLen StatusRightLength
+
+      status_left_style  ∷ FormatSpecifier StyleVariable
+      status_left_style  = _e StatusLeftStyle
+      status_right_style ∷ FormatSpecifier StyleVariable
+      status_right_style = _e StatusRightStyle
+      status_left        ∷ FormatSpecifier FormatVariable
+      status_left        = BareVariable StatusLeft
+      status_right       ∷ FormatSpecifier FormatVariable
+      status_right       = BareVariable StatusRight
+
+      ts_ :: [(𝕋,Format SavedDefault)]
       ts_ =
-        let left_style_status :: Style (FormatSpecifier StyleVariable)
-            left_style_status = ð& alignStyle   ⊩ AlignLeft
-                                           & rangeStyle   ⊩ RangeLeft
-                                           & stylePayload ⊩ status_left_style
-            toF    ∷ ToFormat α => α -> Format SavedDefault
-            toF    = noSaveDefault ∘ toFormat
-            toT    ∷ ToFormat α => α -> 𝕋
-            toT    = toText ∘ toFormat
-            toT_   ∷ FormatSpecifier 𝕋 -> 𝕋
-            toT_   = toT @(FormatSpecifier 𝕋)
-            ç      = T.intercalate ","
+        (second (Format ∘ toText) ⊳
+         [ ( "#{window_name}", tmfv WindowName )
+         , ( "#{@foobie}", tmf $ userVariable "@foobie" )
+         , ( "#{=3:window_name}", tmf $ len3 $ BareVariable WindowName )
+         , ( "#{=/#{status-left-length}:window_name}"
+           , tmf $ len_left_length $ BareVariable WindowName )
+         , ( "#{T:@foobie}" , tmf $ _t $ userVariable "@foobie" )
+         , ( -- "#{=3:#{E:@foobie}}" would also work, but is less compact
+            "#{E;=3:@foobie}", tmf $ len3 (_e $ userVariable "@foobie") )
 
-        in  ((second (Format ∘ toText)) ⊳
-             [ ( "#{window_name}", tmf WindowName )
-             , ( "#{@foobie}", tmf user_foobie )
-             , ( "#{=3:window_name}", tmf $ len3 bare_wname )
-             , ( "#{=/#{status-left-length}:window_name}"
-               , tmf $ len_left_length bare_wname )
-             , ( "#{T:@foobie}", tmf $ ExpandTwice WithStrftime bare_foobie )
-             , ( -- "#{=3:#{E:@foobie}}" would also work, but is less compact
-                "#{E;=3:@foobie}", tmf $ len3 (_E bare_foobie) )
+         {- The ordering of the T and the =1 doesn't matter; the T always
+            effects:
+            > $ tmux set-option @foobie %Y-%M-%d
+            > $ tmux display-message -p '#{T;=/1:#{@foobie}}'
+            > 2
+            > $ tmux display-message -p '#{=/1:#{T:@foobie}}'
+            > 2
+         -}
+         , ( "#{T;=3:@foobie}"
+           , tmf $ _T $ len3 $ BareVariable $ userVariable "@foobie")
+         , ( "#{T;=3:@foobie}", tmf $ len3 $ _t $ userVariable "@foobie")
+         , ( "#{=/#{status-left-length}:window_name}"
+           , tmf $ len_left_length $ BareVariable WindowName )
+         , ( "#{E;=3:window_name}",
+             tmf $ _E $ len3 $ BareVariable WindowName )
+         , ( "#[range=left align=left #{E:status-left-style}]"
+           , tmf $ ð & alignStyle   ⊩ AlignLeft
+                     & rangeStyle   ⊩ RangeLeft
+                     & stylePayload ⊩ status_left_style
+           )
+         , ( ю [ "#[push-default]"
+               , "#{T;=/#{status-left-length}:status-left}"
+               , "#[pop-default]" ]
+           , tmf $ saveDefault (_T $ len_left_length status_left)
+           )
+         , ( ю [ "#[norange default]"
+               , "#[range=right nolist align=right #{E:status-right-style}]"
+               ]
+           , tmf [ tmf $ rangeNoneYDefY
+                 , tmf $ ð & listStyle    ⊩ ListNone
+                           & alignStyle   ⊩ AlignRight
+                           & rangeStyle   ⊩ RangeRight
+                           & stylePayload ⊩ status_right_style
+                 ]
+           )
+         , ( ю [ "#[push-default]"
+               , "#{T;=/#{status-right-length}:status-right}"
+               , "#[pop-default]"
+               ]
+           , tmf $ saveDefault (_T $ len_right_length status_right)
+           )
+         , ( "#[list=on align=#{status-justify}]"
+           , tmf $ ꝏ & listStyle ⊩ ListOn
+                               & alignStyle ⊩ AlignOpt StatusJustify
+           )
+         , ( "#[list=left-marker]<"
+           , tmf $ ꝏ & listStyle ⊩ ListLeftMarker "<"
+           )
+         , ( "#[list=right-marker]>"
+           , tmf $ ꝏ & listStyle ⊩ ListRightMarker ">"
+           )
+         , ( "#[list=on]", tmf $ ꝏ & listStyle ⊩ ListOn )
+         , ( "#{W:#{status-left},#{status-right}}",
+             forEachWindow status_left (𝓙 status_right)
+           )
+         , ( "#{W:#[list=on],#[list=focus]}",
+             forEachWindow (ꝏ & listStyle ⊩ ListOn)
+                           (𝓙 $ ꝏ & listStyle ⊩ ListFocus)
+           )
+         , ("#{?window_end_flag,,#{window-status-separator}}"
+           , tmf $ TMFC
+                (BVar WindowEndFlag) 𝓝 (𝓙 ∘ tmft $ WindowStatusSeparator)
+           )
+         , ( "#[push-default]#{T:window-status-format}#[pop-default]"
+           , tmf $ saveDefault (_t WindowStatusFormat)
+           )
+         , ( "#[range=window|#{window_index} foo]"
+           , tmf $ ð& rangeStyle ⊩ RangeWindow WindowIndex
+                               & stylePayload ⊩ (StyleText "foo")
+           )
+         , ( T.intercalate "," [ "#{&&:#{window_last_flag}"
+                               , "#{!=:#{E:window-status-last-style}"
+                               , "default}}"
+                               ]
+           , tmf (And (BVar WindowLastFlag)
+                      (strNotEq (_e WindowStatusLastStyle) DefaultStyle))
+           )
+         , ( T.intercalate "," [ "#{?#{&&:#{window_last_flag}"
+                               , "#{!=:#{E:window-status-last-style}"
+                               , "default}}"
+                               , "#{E:window-status-last-style}"
+                               , "}"
+                               ]
+           , tmf $ windowStatusLastStyle
+           )
+         , ( "#{||:#{window_activity_flag},#{window_silence_flag}}"
+           , tmf $ Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag)
+           )
 
-             {- The ordering of the T and the =1 doesn't matter; the T always
-                effects:
-                > $ tmux set-option @foobie %Y-%M-%d
-                > $ tmux display-message -p '#{T;=/1:#{@foobie}}'
-                > 2
-                > $ tmux display-message -p '#{=/1:#{T:@foobie}}'
-                > 2
-             -}
-             , ( "#{T;=3:@foobie}", tmf $ _T $ len3 bare_foobie)
-             , ( "#{T;=3:@foobie}", tmf $ len3 $ _T bare_foobie)
-             , ( "#{=/#{status-left-length}:window_name}"
-               , tmf $ len_left_length bare_wname )
-             , ( "#{E;=3:window_name}", tmf $ _E $ len3 bare_wname )
-             , ( "#[range=left align=left #{E:status-left-style}]"
-               , tmf left_style_status
-               )
-             , ( ю [ "#[push-default]"
-                   , "#{T;=/#{status-left-length}:status-left}"
-                   , "#[pop-default]" ]
-               , tmf $ saveDefault (_T $ len_left_length status_left)
-               )
-             , ( ю [ "#[norange default]"
-                   , "#[range=right nolist align=right #{E:status-right-style}]"
-                   ]
-               , tmf [ tmf $ rangeNoneYDefY
-                     , tmf $ ð & listStyle    ⊩ ListNone
-                               & alignStyle   ⊩ AlignRight
-                               & rangeStyle   ⊩ RangeRight
-                               & stylePayload ⊩ status_right_style
-                     ]
-               )
-             , ( ю [ "#[push-default]"
-                   , "#{T;=/#{status-right-length}:status-right}"
-                   , "#[pop-default]"
-                   ]
-               , tmf $ saveDefault (_T $ len_right_length status_right)
-               )
-             , ( "#[list=on align=#{status-justify}]"
-               , tmf $ ꝏ & listStyle ⊩ ListOn
-                                   & alignStyle ⊩ AlignOpt StatusJustify
-               )
-             , ( "#[list=left-marker]<"
-               , tmf $ ꝏ & listStyle ⊩ ListLeftMarker "<"
-               )
-             , ( "#[list=right-marker]>"
-               , tmf $ ꝏ & listStyle ⊩ ListRightMarker ">"
-               )
-             , ( "#[list=on]", tmf $ ꝏ & listStyle ⊩ ListOn )
-             , ( "#{W:#{status-left},#{status-right}}",
-                 forEachWindow status_left (𝓙 status_right)
-               )
-             , ( "#{W:#[list=on],#[list=focus]}",
-                 forEachWindow (ꝏ & listStyle ⊩ ListOn)
-                               (𝓙 $ ꝏ & listStyle ⊩ ListFocus)
-               )
-             , ("#{?window_end_flag,,#{window-status-separator}}"
-               , tmf $ TMFC
-                    (BVar WindowEndFlag) 𝓝 (𝓙 ∘ tmft $ WindowStatusSeparator)
-               )
-             , ( "#[push-default]#{T:window-status-format}#[pop-default]"
-               , tmf $ saveDefault (_t WindowStatusFormat)
-               )
-             , ( "#[range=window|#{window_index} foo]"
-               , tmf $ ð& rangeStyle ⊩ RangeWindow WindowIndex
-                                   & stylePayload ⊩ (StyleText "foo")
-               )
-             , ( T.intercalate "," [ "#{&&:#{window_last_flag}"
-                                   , "#{!=:#{E:window-status-last-style}"
-                                   , "default}}"
-                                   ]
-               , tmf (And (BVar WindowLastFlag)
-                          (strNotEq (_e WindowStatusLastStyle) DefaultStyle))
-               )
-             , ( T.intercalate "," [ "#{?#{&&:#{window_last_flag}"
-                                   , "#{!=:#{E:window-status-last-style}"
-                                   , "default}}"
-                                   , "#{E:window-status-last-style}"
-                                   , "}"
-                                   ]
-               , tmf $ window_status_last_style
-               )
-             , ( "#{||:#{window_activity_flag},#{window_silence_flag}}"
-               , tmf $ Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag)
-               )
-
-             , ( T.intercalate ","
-                 [ "#{&&:#{||:#{window_activity_flag},#{window_silence_flag}}"
-                 , "#{!=:#{E:window-status-activity-style}"
-                 , "default}}" ]
-               , tmf $
-                   And (Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag))
-                       (strNotEq (_e WindowStatusActivityStyle)
-                                 DefaultStyle)
-               )
-             , (ç [ ç [ "#{?#{&&:#{||:#{window_activity_flag}"
-                      , "#{window_silence_flag}}"
-                      , ç ["#{!=:#{E:window-status-activity-style}", "default}}"]
-                      ]
-                  , "#{E:window-status-activity-style}"
-                  , "}"
+         , ( T.intercalate ","
+             [ "#{&&:#{||:#{window_activity_flag},#{window_silence_flag}}"
+             , "#{!=:#{E:window-status-activity-style}"
+             , "default}}" ]
+           , tmf $
+               And (Or (BVar WindowActivityFlag) (BVar WindowSilenceFlag))
+                   (strNotEq (_e WindowStatusActivityStyle)
+                             DefaultStyle)
+           )
+         , (ç [ ç [ "#{?#{&&:#{||:#{window_activity_flag}"
+                  , "#{window_silence_flag}}"
+                  , ç ["#{!=:#{E:window-status-activity-style}", "default}}"]
                   ]
-               , tmf $ conditional
-                     (And (Or (BVar WindowActivityFlag)(BVar WindowSilenceFlag))
-                          (strNotEq (_e WindowStatusActivityStyle)
-                                    DefaultStyle))
-                                    (𝓙 $ _e WindowStatusActivityStyle) 𝓝
-               )
-             , ( "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
-               , tmf $ showWindowBellOrActivity
-               )
-             , ( "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]"
-               , let payload =
-                       [ tmf win_current_or_style
-                       , tmf window_status_last_style
-                       , tmf showWindowBellOrActivity
-                       ]
-                 in  tmf $ ð & rangeWinIY & listFocus ≈ payload
-               )
-
-             , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
+              , "#{E:window-status-activity-style}"
+              , "}"
+              ]
+           , tmf $ conditional
+                 (And (Or (BVar WindowActivityFlag)(BVar WindowSilenceFlag))
+                      (strNotEq (_e WindowStatusActivityStyle)
+                                DefaultStyle))
+                                (𝓙 $ _e WindowStatusActivityStyle) 𝓝
+           )
+         , ( "#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}"
+           , tmf $ showWindowBellOrActivity
+           )
+         , ( "#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]"
+           , let payload =
+                   [ tmf windowCurrentStatusOrStyle
+                   , tmf windowStatusLastStyle
+                   , tmf showWindowBellOrActivity
                    ]
-               , {-| the status line for each window, notably showing its
-                     number, running program, and directory -}
-                 tmf [ listAlignMark (AlignOpt StatusJustify) "<" ">"
-                     , forEachWindow
-                           -- window format (not current window)
-                           [ tmf $
-                                ð & rangeWinIY ≈
-                                      [ tmf (_e WindowStatusStyle)
-                                      , tmf window_status_last_style
-                                      , tmf showWindowBellOrActivity
-                                      ]
-                           , tmf $ saveDefault (_t WindowStatusFormat)
-                           , tmf rangeNoneYDefY
-                           , tmf $ conditional (BVar WindowEndFlag)
-                                                𝓝 (𝓙 WindowStatusSeparator)
-                           ]
-                           -- window format (current window)
-                           (𝓙 [ tmf $ ð & rangeWinIY & listFocus
-                                      ≈ [ tmf win_current_or_style
-                                        , tmf window_status_last_style
-                                        , tmf showWindowBellOrActivity
-                                        ]
-                              , tmf $ saveDefault$ _t WindowStatusCurrentFormat
-                              , tmf $ rangeNoneYDefY & listOn
-                              , tmf $ conditional (BVar WindowEndFlag)
-                                                  𝓝 (𝓙 WindowStatusSeparator)
-                              ]
-                           )
-                     ]
-               )
-             ])
+             in  tmf $ ð & rangeWinIY & listFocus ≈ payload
+           )
+
+         , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
+               ]
+           , {-| the status line for each window, notably showing its
+                 number, running program, and directory -}
+             tmf [ listAlignMark (AlignOpt StatusJustify) "<" ">"
+                 , forEachWindow
+                       -- window format (not current window)
+                       [ tmf $
+                            ð & rangeWinIY ≈
+                                  [ tmf (_e WindowStatusStyle)
+                                  , tmf windowStatusLastStyle
+                                  , tmf showWindowBellOrActivity
+                                  ]
+                       , tmf $ saveDefault (_t WindowStatusFormat)
+                       , tmf rangeNoneYDefY
+                       , tmf $ conditional (BVar WindowEndFlag)
+                                            𝓝 (𝓙 WindowStatusSeparator)
+                       ]
+                       -- window format (current window)
+                       (𝓙 [ tmf $ ð & rangeWinIY & listFocus
+                                  ≈ [ tmf windowCurrentStatusOrStyle
+                                    , tmf windowStatusLastStyle
+                                    , tmf showWindowBellOrActivity
+                                    ]
+                          , tmf $ saveDefault$ _t WindowStatusCurrentFormat
+                          , tmf $ rangeNoneYDefY & listOn
+                          , tmf $ conditional (BVar WindowEndFlag)
+                                              𝓝 (𝓙 WindowStatusSeparator)
+                          ]
+                       )
+                 ]
+           )
+         ])
 
       do_test :: (𝕋, Format α) → TestTree
       do_test (t,x) = let tname = if T.length t > 60
