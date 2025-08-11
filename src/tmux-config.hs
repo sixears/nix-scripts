@@ -8,12 +8,6 @@
 {-# LANGUAGE UnicodeSyntax     #-}
 {-# LANGUAGE ViewPatterns      #-}
 
-{- ## can we construct some class for "convert to TMuxFormat", such that all
-      the conversions (constructors) are inferred from the type?
-
-   use tmf everywhere 'stead of TMF*
--}
-
 {- ## remove BareText ? -}
 
 {- ## Do we still need StringVariableText? -}
@@ -684,7 +678,7 @@ listFocus = listStyle ⊩ ListFocus
 
   {-| align the list; if either end gets trimmed, mark it
       as such -}
-listAlignMark align l r = TMFL [ tmf $ ꝏ & listStyle ⊩ ListOn
+listAlignMark align l r = tmf [ tmf $ ꝏ & listStyle ⊩ ListOn
                                          & alignStyle ⊩ align
                                , tmf $ ꝏ & listStyle ⊩ ListLeftMarker l
                                , tmf $ ꝏ & listStyle ⊩ ListRightMarker r
@@ -913,33 +907,33 @@ tests = localOption Never $
                    ]
                , {-| the status line for each window, notably showing its
                      number, running program, and directory -}
-                 TMFL [ listAlignMark (AlignOpt StatusJustify) "<" ">"
-                      , forEachWindow
-                            -- window format (not current window)
-                            [ tmf $
-                                 ð & rangeWinIY ≈
-                                       [ tmf (_e WindowStatusStyle)
-                                       , tmf window_status_last_style
-                                       , tmf showWindowBellOrActivity
-                                       ]
-                            , tmf $ saveDefault (_t WindowStatusFormat)
-                            , tmf rangeNoneYDefY
-                            , tmf $ conditional (BVar WindowEndFlag)
-                                                 𝓝 (𝓙 WindowStatusSeparator)
-                            ]
-                            -- window format (current window)
-                            (𝓙 [ tmf $ ð & rangeWinIY & listFocus
-                                       ≈ [ tmf win_current_or_style
-                                         , tmf window_status_last_style
-                                         , tmf showWindowBellOrActivity
-                                         ]
-                               , tmf $ saveDefault$ _t WindowStatusCurrentFormat
-                               , tmf $ rangeNoneYDefY & listOn
-                               , tmf $ conditional (BVar WindowEndFlag)
-                                                   𝓝 (𝓙 WindowStatusSeparator)
-                               ]
-                            )
-                      ]
+                 tmf [ listAlignMark (AlignOpt StatusJustify) "<" ">"
+                     , forEachWindow
+                           -- window format (not current window)
+                           [ tmf $
+                                ð & rangeWinIY ≈
+                                      [ tmf (_e WindowStatusStyle)
+                                      , tmf window_status_last_style
+                                      , tmf showWindowBellOrActivity
+                                      ]
+                           , tmf $ saveDefault (_t WindowStatusFormat)
+                           , tmf rangeNoneYDefY
+                           , tmf $ conditional (BVar WindowEndFlag)
+                                                𝓝 (𝓙 WindowStatusSeparator)
+                           ]
+                           -- window format (current window)
+                           (𝓙 [ tmf $ ð & rangeWinIY & listFocus
+                                      ≈ [ tmf win_current_or_style
+                                        , tmf window_status_last_style
+                                        , tmf showWindowBellOrActivity
+                                        ]
+                              , tmf $ saveDefault$ _t WindowStatusCurrentFormat
+                              , tmf $ rangeNoneYDefY & listOn
+                              , tmf $ conditional (BVar WindowEndFlag)
+                                                  𝓝 (𝓙 WindowStatusSeparator)
+                              ]
+                           )
+                     ]
                )
              ])
 
