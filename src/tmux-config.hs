@@ -8,12 +8,6 @@
 {-# LANGUAGE UnicodeSyntax     #-}
 {-# LANGUAGE ViewPatterns      #-}
 
-{- ## remove BareText ? -}
-
-{- ## Do we still need StringVariableText? -}
-
-{- ## Do we still need emptyStyle (as opposed to emptyStyle_) ? -}
-
 import Base1
 
 import Prelude  ( error )
@@ -241,14 +235,12 @@ strNotEq a b = let toT ∷ ToFormat γ => γ → StringExpr
 
 ------------------------------------------------------------
 
-data StringVariable = WindowStatusSeparator | StringVariableText 𝕋 deriving Show
+data StringVariable = WindowStatusSeparator deriving Show
 
 instance Printable StringVariable where
-  print (StringVariableText sot) = P.text sot
   print WindowStatusSeparator  = "window-status-separator"
 
 instance ToFormat StringVariable where
-  toFormat (StringVariableText t)  = Format t
   toFormat v = Format $ [fmt|#{%T}|] v
 
 ------------------------------------------------------------
@@ -375,9 +367,6 @@ stylePayload_ = lens _stylePayload (\ s a -> s { _stylePayload = a })
 instance Default (Style α) where
   def = Style NoStyleDefault 𝓝 𝓝 𝓝 𝓝
 
-emptyStyle ∷ Style α
-emptyStyle = Style NoStyleDefault 𝓝 𝓝 𝓝 𝓝
-
 ꝏ ∷ Style () = def
 
 instance Show α => Printable (Style α) where print s = P.string (show s)
@@ -430,8 +419,6 @@ instance IsVariable UserVariable
 data FormatSpecifier α = IsVariable α => BareVariable α
                        | ExpandTwice WithStrftime (FormatSpecifier α)
                        | MaxLen LenSpec (FormatSpecifier α)
-                       -- XXX replace this with Format?
-                       | BareText 𝕋
 
 --------------------
 
@@ -439,7 +426,6 @@ instance Show α => Show (FormatSpecifier α) where
   show (BareVariable v)     = [fmt|IsVariable %w|] v
   show (ExpandTwice wsf v) = [fmt|ExpandTwice %w %w|] wsf v
   show (MaxLen ls v)       = [fmt|MaxLen %w %w|] ls v
-  show (BareText v)        = [fmt|BareText %w|] v
 
 ------------------------------------------------------------
 
@@ -454,7 +440,6 @@ innerFormatSpecifier :: FormatSpecifier α → 𝕄 (FormatSpecifier α)
 innerFormatSpecifier (BareVariable   _)      = 𝓝
 innerFormatSpecifier (MaxLen        _  fs)  = 𝓙 fs
 innerFormatSpecifier (ExpandTwice   _  fs)  = 𝓙 fs
-innerFormatSpecifier (BareText      _)      = 𝓝
 
 --------------------
 
@@ -462,7 +447,6 @@ instance (Show α, ToFormat α, Printable α) => Printable (FormatSpecifier α) 
   print (BareVariable  t)           = print t
   print (ExpandTwice w_strftime _) = P.text $ [fmt|%T|] w_strftime
   print (MaxLen      len_spec   _) = P.text $ [fmt|%T|] len_spec
-  print (BareText  t)              = print $ "ZZZ" ◇ t
 
 --------------------
 
@@ -476,16 +460,7 @@ toStackedFormat stack ofs =
                    stck → Format $ [fmt|#{%t:%T}|] (T.intercalate ";" stck) ofs
 
 instance (Show α, ToFormat α, Printable α) => ToFormat (FormatSpecifier α) where
-  toFormat (BareText   t) = Format t
   toFormat ofs            = toStackedFormat [] ofs
-
-------------------------------------------------------------
-
-class Empty α where
-  empty ∷ α
-
-instance Empty (TMuxFormatTyped StringVariable) where
-  empty = TMFV (StringVariableText "")
 
 ------------------------------------------------------------
 
