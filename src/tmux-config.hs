@@ -881,23 +881,22 @@ tests = localOption Never $
              tmf [ listAlignMark (AlignOpt StatusJustify) "<" ">"
                  , forEachWindow
                        -- window format (not current window)
-                       [ tmf $
-                            ð & rangeWinIY ≈
-                                  [ tmf (_e WindowStatusStyle)
-                                  , tmf windowStatusLastStyle
-                                  , tmf showWindowBellOrActivity
-                                  ]
+                       [ tmf $ ð & rangeWinIY
+                                     ≈ [ tmf (_e WindowStatusStyle)
+                                       , tmf windowStatusLastStyle
+                                       , tmf showWindowBellOrActivity
+                                       ]
                        , tmf $ saveDefault (_t WindowStatusFormat)
                        , tmf rangeNoneYDefY
                        , tmf $ conditional (BVar WindowEndFlag)
-                                            𝓝 (𝓙 WindowStatusSeparator)
+                                           𝓝 (𝓙 WindowStatusSeparator)
                        ]
                        -- window format (current window)
                        (𝓙 [ tmf $ ð & rangeWinIY & listFocus
-                                  ≈ [ tmf windowCurrentStatusOrStyle
-                                    , tmf windowStatusLastStyle
-                                    , tmf showWindowBellOrActivity
-                                    ]
+                                      ≈ [ tmf windowCurrentStatusOrStyle
+                                        , tmf windowStatusLastStyle
+                                        , tmf showWindowBellOrActivity
+                                        ]
                           , tmf $ saveDefault$ _t WindowStatusCurrentFormat
                           , tmf $ rangeNoneYDefY & listOn
                           , tmf $ conditional (BVar WindowEndFlag)
@@ -908,7 +907,7 @@ tests = localOption Never $
            )
          ])
 
-      do_test :: (𝕋, Format α) → TestTree
+      do_test ∷ (𝕋, Format α) → TestTree
       do_test (t,x) = let tname = if T.length t > 60
                                   then T.unpack (T.take 60 t) ◇ "…"
                                   else T.unpack t
