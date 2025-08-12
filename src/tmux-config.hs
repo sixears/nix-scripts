@@ -644,8 +644,11 @@ instance TMuxFormatable UserVariable where
 rangeWinIY ∷ Style α → Style α
 rangeWinIY = rangeStyle ⊩ RangeWindow WindowIndex
 
-rangeNoneYDefY ∷ Style ()
-rangeNoneYDefY = ꝏ & rangeStyle ⊩ RangeNone & styleDefault ⊢ StyleDefault
+rangeNone ∷ Style α → Style α
+rangeNone = rangeStyle ⊩ RangeNone
+
+styleDef ∷ Style α → Style α
+styleDef = styleDefault ⊢ StyleDefault
 
 listOn ∷ Style α → Style α
 listOn = listStyle ⊩ ListOn
@@ -706,13 +709,42 @@ showWindowBellOrActivity =
                   (𝓙 ∘ tmft $ _e WindowStatusBellStyle)
                   (𝓙 ∘ tmft $ show_window_activity)
 
+{-| WindowSeparator, unless this is the last window -}
+windowSeparator ∷ TMuxFormatTyped StringVariable
+windowSeparator = conditional (BVar WindowEndFlag) 𝓝 (𝓙 WindowStatusSeparator)
+
+data Current = NotCurrent | IsCurrent
+
+windowFormat ∷ Current → [TMuxFormat]
+windowFormat current =
+  let (current_list_focus,current_status_style,status_format,
+       list_on) =
+        case current of
+          NotCurrent → ( id
+                       , tmf $ _e WindowStatusStyle
+                       , WindowStatusFormat
+                       , id)
+          IsCurrent  → ( listFocus
+                       , tmf windowCurrentStatusOrStyle
+                       , WindowStatusCurrentFormat
+                       , listOn)
+  in  [ tmf $ ð & rangeWinIY & current_list_focus
+                    ≈ [ current_status_style
+                      , tmf windowStatusLastStyle
+                      , tmf showWindowBellOrActivity
+                      ]
+      , tmf $ saveDefault (_t status_format)
+      , tmf $ ꝏ & rangeNone & styleDef & list_on
+      , tmf $ windowSeparator
+      ]
+
 -- main ------------------------------------------------------------------------
 
 main :: IO ()
 main = do
   say $ toFormat (def & alignStyle   ⊩ AlignLeft
-                             & rangeStyle   ⊩ RangeLeft
-                             & stylePayload ⊩ ExpandTwice @StyleVariable WithoutStrftime (BareVariable StatusLeftStyle)
+                      & rangeStyle   ⊩ RangeLeft
+                      & stylePayload ⊩ ExpandTwice @StyleVariable WithoutStrftime (BareVariable StatusLeftStyle)
                  )
 
 --------------------------------------------------------------------------------
@@ -779,7 +811,7 @@ tests = localOption Never $
          , ( ю [ "#[norange default]"
                , "#[range=right nolist align=right #{E:status-right-style}]"
                ]
-           , tmf [ tmf $ rangeNoneYDefY
+           , tmf [ tmf $ ꝏ & rangeNone & styleDef
                  , tmf $ ð & listStyle    ⊩ ListNone
                            & alignStyle   ⊩ AlignRight
                            & rangeStyle   ⊩ RangeRight
@@ -793,8 +825,7 @@ tests = localOption Never $
            , tmf $ saveDefault (_T $ len_right_length status_right)
            )
          , ( "#[list=on align=#{status-justify}]"
-           , tmf $ ꝏ & listStyle ⊩ ListOn
-                               & alignStyle ⊩ AlignOpt StatusJustify
+           , tmf $ ꝏ & listOn & alignStyle ⊩ AlignOpt StatusJustify
            )
          , ( "#[list=left-marker]<"
            , tmf $ ꝏ & listStyle ⊩ ListLeftMarker "<"
@@ -802,13 +833,12 @@ tests = localOption Never $
          , ( "#[list=right-marker]>"
            , tmf $ ꝏ & listStyle ⊩ ListRightMarker ">"
            )
-         , ( "#[list=on]", tmf $ ꝏ & listStyle ⊩ ListOn )
+         , ( "#[list=on]", tmf $ ꝏ & listOn )
          , ( "#{W:#{status-left},#{status-right}}",
              forEachWindow status_left (𝓙 status_right)
            )
          , ( "#{W:#[list=on],#[list=focus]}",
-             forEachWindow (ꝏ & listStyle ⊩ ListOn)
-                           (𝓙 $ ꝏ & listStyle ⊩ ListFocus)
+             forEachWindow (ꝏ & listOn) (𝓙 $ ꝏ & listFocus)
            )
          , ("#{?window_end_flag,,#{window-status-separator}}"
            , tmf $ TMFC
@@ -818,7 +848,7 @@ tests = localOption Never $
            , tmf $ saveDefault (_t WindowStatusFormat)
            )
          , ( "#[range=window|#{window_index} foo]"
-           , tmf $ ð& rangeStyle ⊩ RangeWindow WindowIndex
+           , tmf $ ð & rangeWinIY
                                & stylePayload ⊩ (StyleText "foo")
            )
          , ( T.intercalate "," [ "#{&&:#{window_last_flag}"
@@ -880,29 +910,7 @@ tests = localOption Never $
                  number, running program, and directory -}
              tmf [ listAlignMark (AlignOpt StatusJustify) "<" ">"
                  , forEachWindow
-                       -- window format (not current window)
-                       [ tmf $ ð & rangeWinIY
-                                     ≈ [ tmf (_e WindowStatusStyle)
-                                       , tmf windowStatusLastStyle
-                                       , tmf showWindowBellOrActivity
-                                       ]
-                       , tmf $ saveDefault (_t WindowStatusFormat)
-                       , tmf rangeNoneYDefY
-                       , tmf $ conditional (BVar WindowEndFlag)
-                                           𝓝 (𝓙 WindowStatusSeparator)
-                       ]
-                       -- window format (current window)
-                       (𝓙 [ tmf $ ð & rangeWinIY & listFocus
-                                      ≈ [ tmf windowCurrentStatusOrStyle
-                                        , tmf windowStatusLastStyle
-                                        , tmf showWindowBellOrActivity
-                                        ]
-                          , tmf $ saveDefault$ _t WindowStatusCurrentFormat
-                          , tmf $ rangeNoneYDefY & listOn
-                          , tmf $ conditional (BVar WindowEndFlag)
-                                              𝓝 (𝓙 WindowStatusSeparator)
-                          ]
-                       )
+                     (windowFormat NotCurrent) (𝓙 $ windowFormat IsCurrent)
                  ]
            )
          ])
