@@ -14,6 +14,7 @@ import Prelude  ( error )
 
 -- base --------------------------------
 
+import Data.Char   ( isAlphaNum )
 import Data.List   ( intercalate, reverse, sortOn )
 import Data.Maybe  ( catMaybes )
 
@@ -364,6 +365,9 @@ stylePayload = lens _stylePayload (\ s a → s { _stylePayload = a })
 stylePayload_ ∷ Lens' (Style α) (𝕄 α)
 stylePayload_ = lens _stylePayload (\ s a → s { _stylePayload = a })
 
+style :: α → Style α
+style y = Style NoStyleDefault 𝓝 𝓝 𝓝 (𝓙 y)
+
 instance Default (Style α) where
   def = Style NoStyleDefault 𝓝 𝓝 𝓝 𝓝
 
@@ -641,14 +645,32 @@ instance TMuxFormatable UserVariable where
 --             miscellaneous building blocks              --
 ------------------------------------------------------------
 
+alignLeft ∷ Style α → Style α
+alignLeft = alignStyle ⊩ AlignLeft
+
+alignRight ∷ Style α → Style α
+alignRight = alignStyle ⊩ AlignRight
+
+--------------------
+
+rangeLeft ∷ Style α → Style α
+rangeLeft = rangeStyle ⊩ RangeLeft
+
+rangeRight ∷ Style α → Style α
+rangeRight = rangeStyle ⊩ RangeRight
+
 rangeWinIY ∷ Style α → Style α
 rangeWinIY = rangeStyle ⊩ RangeWindow WindowIndex
 
 rangeNone ∷ Style α → Style α
 rangeNone = rangeStyle ⊩ RangeNone
 
+--------------------
+
 styleDef ∷ Style α → Style α
 styleDef = styleDefault ⊢ StyleDefault
+
+--------------------
 
 listOn ∷ Style α → Style α
 listOn = listStyle ⊩ ListOn
@@ -656,13 +678,17 @@ listOn = listStyle ⊩ ListOn
 listFocus ∷ Style α → Style α
 listFocus = listStyle ⊩ ListFocus
 
+noList ∷ Style α → Style α
+noList = listStyle ⊩ ListNone
+
+--------------------
+
 {-| align the list; if either end gets trimmed, mark it as such -}
 listAlignMark ∷ Alignment → 𝕋 → 𝕋 → TMuxFormat
-listAlignMark align l r = tmf [ tmf $ ꝏ & listStyle ⊩ ListOn
-                                        & alignStyle ⊩ align
+listAlignMark align l r = tmf [ tmf $ ꝏ & listOn & alignStyle ⊩ align
                               , tmf $ ꝏ & listStyle ⊩ ListLeftMarker l
                               , tmf $ ꝏ & listStyle ⊩ ListRightMarker r
-                              , tmf $ ꝏ & listStyle ⊩ ListOn
+                              , tmf $ ꝏ & listOn
                               ]
 
 {-| window-current-status-style, if that's not the default;
@@ -740,12 +766,44 @@ windowFormat current =
 
 -- main ------------------------------------------------------------------------
 
+data OptionScope = OptionScopeGlobal
+
+newtype OptionFlags = OptionFlags { optionScope ∷ OptionScope }
+
+instance Printable OptionFlags where
+  print _ = "-g"
+
+newtype OptionName = OptionName 𝕋 deriving Printable
+
+optionName ∷ 𝕋 → OptionName
+optionName t =
+  if T.filter (\ c → isAlphaNum c ∨ c ∈ "-_") t == t
+  then OptionName t
+  else error $ "illegal option name: '" ◇ T.unpack t ◇ "'"
+
+------------------------------------------------------------
+
+data TMuxConfig = SetOption OptionName OptionFlags TMuxFormat
+
+instance Printable TMuxConfig where
+  print (SetOption option_name option_flags tmux_format) =
+    P.text $ [fmt|set-option %T %T "%T"|] option_flags option_name tmux_format
+
+------------------------------------------------------------
+
 main :: IO ()
 main = do
-  say $ toFormat (def & alignStyle   ⊩ AlignLeft
-                      & rangeStyle   ⊩ RangeLeft
-                      & stylePayload ⊩ ExpandTwice @StyleVariable WithoutStrftime (BareVariable StatusLeftStyle)
-                 )
+-- CR mpearce: status-format[1]
+  let status_format_1 = SetOption (optionName "status-format") (OptionFlags OptionScopeGlobal) (tmf [ listAlignMark (AlignOpt StatusJustify) "<" ">"
+            , forEachWindow (windowFormat NotCurrent)
+                            (𝓙 $ windowFormat IsCurrent)
+            ])
+  say $ tmf [ listAlignMark (AlignOpt StatusJustify) "<" ">"
+            , forEachWindow (windowFormat NotCurrent)
+                            (𝓙 $ windowFormat IsCurrent)
+            ]
+  say status_format_1
+
 
 --------------------------------------------------------------------------------
 --                                   tests                                    --
@@ -799,9 +857,8 @@ tests = localOption Never $
          , ( "#{E;=3:window_name}",
              tmf $ _E $ len3 $ BareVariable WindowName )
          , ( "#[range=left align=left #{E:status-left-style}]"
-           , tmf $ ð & alignStyle   ⊩ AlignLeft
-                     & rangeStyle   ⊩ RangeLeft
-                     & stylePayload ⊩ status_left_style
+           , tmf $ style status_left_style & alignStyle   ⊩ AlignLeft
+                                           & rangeStyle   ⊩ RangeLeft
            )
          , ( ю [ "#[push-default]"
                , "#{T;=/#{status-left-length}:status-left}"
@@ -848,8 +905,7 @@ tests = localOption Never $
            , tmf $ saveDefault (_t WindowStatusFormat)
            )
          , ( "#[range=window|#{window_index} foo]"
-           , tmf $ ð & rangeWinIY
-                               & stylePayload ⊩ (StyleText "foo")
+           , tmf $ style (StyleText "foo") & rangeWinIY
            )
          , ( T.intercalate "," [ "#{&&:#{window_last_flag}"
                                , "#{!=:#{E:window-status-last-style}"
@@ -912,6 +968,27 @@ tests = localOption Never $
                  , forEachWindow
                      (windowFormat NotCurrent) (𝓙 $ windowFormat IsCurrent)
                  ]
+           )
+
+         , ( ю [ "#[range=left align=left #{E:status-left-style}]"
+               , ю [ "#[push-default]"
+                   , "#{T;=/#{status-left-length}:status-left}"
+                   , "#[pop-default]"
+                   ]
+               , "#[norange default]"
+               , "#[range=right nolist align=right #{E:status-right-style}]"
+               , ю [ "#[push-default]"
+                   , "#{T;=/#{status-right-length}:status-right}"
+                   , "#[pop-default]"
+                   ]
+               ]
+           , tmf [ tmf $ style(_e StatusLeftStyle) & rangeLeft & alignLeft
+                 , tmf $ saveDefault (_T $ len_left_length status_left)
+                 , tmf $ ꝏ & rangeNone & styleDef
+                 , tmf $ style(_e StatusRightStyle) & rangeRight & alignRight & noList
+                 , tmf $ saveDefault (_T $ len_right_length status_right)
+                 ]
+
            )
          ])
 
