@@ -739,6 +739,14 @@ showWindowBellOrActivity =
 windowSeparator ∷ TMuxFormatTyped StringVariable
 windowSeparator = conditional (BVar WindowEndFlag) 𝓝 (𝓙 WindowStatusSeparator)
 
+----------------------------------------
+
+{-| format `v` to a max length of `l` -}
+maxLen ∷ IsVariable ν => IntVariable → ν → FormatSpecifier ν
+maxLen l v = _T $ MaxLen (OptLen l) (BareVariable v)
+
+----------------------------------------
+
 data Current = NotCurrent | IsCurrent
 
 windowFormat ∷ Current → [TMuxFormat]
@@ -764,11 +772,21 @@ windowFormat current =
       , tmf $ windowSeparator
       ]
 
+{-| config for a tmux status bar that shows status-left & status-right (but
+    nothing inbetween -}
+lrBar ∷ [TMuxFormat]
+lrBar = [ tmf $ style(_e StatusLeftStyle) & rangeLeft & alignLeft
+        , tmf $ saveDefault (maxLen StatusLeftLength StatusLeft)
+        , tmf $ ꝏ & rangeNone & styleDef
+        , tmf $ style(_e StatusRightStyle) & rangeRight & alignRight & noList
+        , tmf $ saveDefault (maxLen StatusRightLength StatusRight)
+        ]
+
 -- main ------------------------------------------------------------------------
 
 data OptionScope = OptionScopeGlobal
 
-newtype OptionFlags = OptionFlags { optionScope ∷ OptionScope }
+newtype OptionFlags = OptionFlags { _optionScope ∷ OptionScope }
 
 instance Printable OptionFlags where
   print _ = "-g"
@@ -817,8 +835,6 @@ tests = localOption Never $
       len3               = MaxLen $ FixedLen 3
       len_left_length    ∷ FormatSpecifier α → FormatSpecifier α
       len_left_length    = MaxLen $ OptLen StatusLeftLength
-      len_right_length   ∷ FormatSpecifier α → FormatSpecifier α
-      len_right_length   = MaxLen $ OptLen StatusRightLength
 
       status_left_style  ∷ FormatSpecifier StyleVariable
       status_left_style  = _e StatusLeftStyle
@@ -836,7 +852,7 @@ tests = localOption Never $
          , ( "#{@foobie}", tmf $ userVariable "@foobie" )
          , ( "#{=3:window_name}", tmf $ len3 $ BareVariable WindowName )
          , ( "#{=/#{status-left-length}:window_name}"
-           , tmf $ len_left_length $ BareVariable WindowName )
+           , tmf $ (MaxLen $ OptLen StatusLeftLength) (BareVariable WindowName))
          , ( "#{T:@foobie}" , tmf $ _t $ userVariable "@foobie" )
          , ( -- "#{=3:#{E:@foobie}}" would also work, but is less compact
             "#{E;=3:@foobie}", tmf $ len3 (_e $ userVariable "@foobie") )
@@ -863,7 +879,7 @@ tests = localOption Never $
          , ( ю [ "#[push-default]"
                , "#{T;=/#{status-left-length}:status-left}"
                , "#[pop-default]" ]
-           , tmf $ saveDefault (_T $ len_left_length status_left)
+           , tmf $ saveDefault (maxLen StatusLeftLength StatusLeft)
            )
          , ( ю [ "#[norange default]"
                , "#[range=right nolist align=right #{E:status-right-style}]"
@@ -879,7 +895,7 @@ tests = localOption Never $
                , "#{T;=/#{status-right-length}:status-right}"
                , "#[pop-default]"
                ]
-           , tmf $ saveDefault (_T $ len_right_length status_right)
+           , tmf $ saveDefault (maxLen StatusRightLength StatusRight)
            )
          , ( "#[list=on align=#{status-justify}]"
            , tmf $ ꝏ & listOn & alignStyle ⊩ AlignOpt StatusJustify
@@ -982,13 +998,7 @@ tests = localOption Never $
                    , "#[pop-default]"
                    ]
                ]
-           , tmf [ tmf $ style(_e StatusLeftStyle) & rangeLeft & alignLeft
-                 , tmf $ saveDefault (_T $ len_left_length status_left)
-                 , tmf $ ꝏ & rangeNone & styleDef
-                 , tmf $ style(_e StatusRightStyle) & rangeRight & alignRight & noList
-                 , tmf $ saveDefault (_T $ len_right_length status_right)
-                 ]
-
+           , tmf lrBar
            )
          ])
 
