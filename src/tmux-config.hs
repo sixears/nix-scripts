@@ -15,7 +15,7 @@ import Prelude  ( error )
 -- base --------------------------------
 
 import Data.Char   ( isAlphaNum )
-import Data.List   ( intercalate, reverse, sortOn )
+import Data.List   ( intercalate, reverse, sortOn, zip )
 import Data.Maybe  ( catMaybes )
 
 import Control.Lens.Lens  ( Lens )
@@ -802,25 +802,29 @@ optionName t =
 ------------------------------------------------------------
 
 data TMuxConfig = SetOption OptionName OptionFlags TMuxFormat
+                | SetOptionL OptionName OptionFlags [TMuxFormat]
 
 instance Printable TMuxConfig where
-  print (SetOption option_name option_flags tmux_format) =
-    P.text $ [fmt|set-option %T %T "%T"|] option_flags option_name tmux_format
+  print (SetOption opt_name opt_flags tmux_format) =
+    P.text $ [fmt|set-option %T %T "%T"|] opt_flags opt_name tmux_format
+  print (SetOptionL opt_name opt_flags formats) =
+    let fmtF (i,t) = [fmtT|set-option[%d] %T %T "%T"|] i opt_flags opt_name t
+    in  P.text $ T.intercalate "\n" $ fmtF ⊳ zip [(0∷ℕ)..] formats
 
 ------------------------------------------------------------
 
 main :: IO ()
-main = do
+main =
 -- CR mpearce: status-format[1]
-  let status_format_1 = SetOption (optionName "status-format") (OptionFlags OptionScopeGlobal) (tmf [ listAlignMark (AlignOpt StatusJustify) "<" ">"
-            , forEachWindow (windowFormat NotCurrent)
-                            (𝓙 $ windowFormat IsCurrent)
-            ])
-  say $ tmf [ listAlignMark (AlignOpt StatusJustify) "<" ">"
-            , forEachWindow (windowFormat NotCurrent)
-                            (𝓙 $ windowFormat IsCurrent)
-            ]
-  say status_format_1
+  let status_format =
+        SetOptionL (optionName "status-format") (OptionFlags OptionScopeGlobal)
+                  [ tmf lrBar
+                  , tmf [ listAlignMark (AlignOpt StatusJustify) "<" ">"
+                        , forEachWindow (windowFormat NotCurrent)
+                                        (𝓙 $ windowFormat IsCurrent)
+                        ]
+                  ]
+  in  say status_format
 
 
 --------------------------------------------------------------------------------
