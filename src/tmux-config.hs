@@ -14,20 +14,66 @@ import Prelude  ( error )
 
 -- base --------------------------------
 
-import Data.Char   ( isAlphaNum )
-import Data.List   ( intercalate, reverse, sortOn, zip )
-import Data.Maybe  ( catMaybes )
+import Data.Char      ( isAlphaNum )
+import Data.Function  ( flip )
+import Data.List      ( intercalate, reverse, sortOn, zip )
+import Data.Maybe     ( catMaybes )
 
 import Control.Lens.Lens  ( Lens )
 
+-- fpath -------------------------------
+
+import FPath.AbsFile           ( AbsFile, absfile )
+import FPath.Error.FPathError  ( AsFPathError )
+
+-- log ---------------------------------
+
+import Control.Monad.Log  ( MonadLog )
+
+-- logging-effect ----------------------
+
+import Control.Monad.Log  ( LoggingT )
+
+-- log-plus ----------------------------
+
+import Log  ( Log )
+
+-- mockio-log --------------------------
+
+import MockIO.MockIOClass  ( MockIOClass )
+import MockIO.DoMock       ( DoMock( NoMock ), HasDoMock )
+
+-- mockio-plus -------------------------
+
+import MockIO.Process            ( ꙩ )
+import MockIO.Process.MLCmdSpec  ( ToMLCmdSpec )
+
 -- monadio-plus ------------------------
 
-import MonadIO  ( say )
+import MonadIO                        ( say )
+import MonadIO.Base                   ( getArgs )
+import MonadIO.Error.CreateProcError  ( AsCreateProcError )
+import MonadIO.Error.ProcExitError    ( AsProcExitError )
 
 -- more-unicode ------------------------
 
-import Data.MoreUnicode.Lens   ( (⊩) )
-import Data.MoreUnicode.Maybe  ( pattern 𝓙, pattern 𝓝, (⧐) )
+import Data.MoreUnicode.Either  ( pattern 𝓛, pattern 𝓡 )
+import Data.MoreUnicode.Lens    ( (⊩) )
+import Data.MoreUnicode.Maybe   ( pattern 𝓙, pattern 𝓝, (⧐) )
+
+-- mtl ---------------------------------
+
+import Control.Monad.Reader  ( MonadReader, runReaderT )
+
+-- optparse-applicative ----------------
+
+-- import Options.Applicative.Builder  ( argument, flag, help, long, metavar )
+import Options.Applicative.Types    ( Parser )
+
+-- stdmain -----------------------------
+
+import StdMain             ( stdMainNoDR )
+import StdMain.UsageError  ( UsageFPProcIOError )
 
 -- tasty -------------------------------
 
@@ -55,6 +101,27 @@ import qualified Text.Printer  as P
 
 ð ∷ Default α => α
 ð = def
+
+tmux ∷ AbsFile
+tmux = [absfile|/home/martyn/.nix-profiles/default/bin/tmux|]
+
+------------------------------------------------------------
+
+data Options = Options { -- _mode   ∷ Mode
+                         -- , _inputs ∷ NonEmpty File
+                       }
+
+----------------------------------------
+
+parseOptions ∷ Parser Options
+parseOptions = pure Options
+{-
+  Options ⊳ ( flag (ModeParsed Human) ModeRaw
+                   (long "raw" ⊕ help "output all ID_ tags")
+            ∤ flag (ModeParsed Human) (ModeParsed Tabs)
+                   (long "tabs" ⊕ help "output tab-delimited"))
+          ⊵ parseNE (argument readM (metavar "FILENAME"))
+-}
 
 ------------------------------------------------------------
 
@@ -189,6 +256,13 @@ instance ToFormat Variable where
   toFormat (StringVar sv) = Format $ [fmt|toFormat StringVar %w|] sv
   toFormat (StyleVar  sv) = Format $ [fmt|toFormat StyleVar %w|] sv
   toFormat (UserVar   uv) = Format $ [fmt|toFormat UserVar %w|] uv
+
+------------------------------------------------------------
+
+data NatExpr = NatLit ℕ  deriving Show
+
+instance Printable NatExpr where
+  print (NatLit n) = P.text $ [fmt|%d|] n
 
 ------------------------------------------------------------
 
@@ -338,12 +412,18 @@ listPayload ListNone            = 𝓝
 
 ------------------------------------------------------------
 
-data StyleDefault = StyleDefault | NoStyleDefault deriving Show
+newtype Colour8 = Colour8 Word8  deriving Show
+
+instance Printable Colour8 where print (Colour8 c) = P.text $ [fmt|%d|] c
+
+data StyleDefault = StyleDefault | NoStyleDefault  deriving Show
 
 data Style α = Style { _styleDefault ∷ StyleDefault
                      , _alignStyle   ∷ 𝕄 Alignment
                      , _rangeStyle   ∷ 𝕄 RangeStyle
                      , _listStyle    ∷ 𝕄 ListStyle
+                     , _fg           ∷ 𝕄 Colour8
+                     , _bg           ∷ 𝕄 Colour8
                      , _stylePayload ∷ 𝕄 α
                      }
   deriving Show
@@ -360,28 +440,36 @@ styleDefault = lens _styleDefault (\ s a → s { _styleDefault = a })
 listStyle :: Lens' (Style α) (𝕄 ListStyle)
 listStyle = lens _listStyle (\ s a → s { _listStyle = a })
 
+fg ∷ Lens' (Style α) (𝕄 Colour8)
+fg = lens _fg (\ s c → s { _fg = c })
+
+bg ∷ Lens' (Style α) (𝕄 Colour8)
+bg = lens _bg (\ s c → s { _bg = c })
+
 stylePayload ∷ Lens (Style α) (Style β) (𝕄 α) (𝕄 β)
 stylePayload = lens _stylePayload (\ s a → s { _stylePayload = a })
 stylePayload_ ∷ Lens' (Style α) (𝕄 α)
 stylePayload_ = lens _stylePayload (\ s a → s { _stylePayload = a })
 
 style :: α → Style α
-style y = Style NoStyleDefault 𝓝 𝓝 𝓝 (𝓙 y)
+style y = Style NoStyleDefault 𝓝 𝓝 𝓝 𝓝 𝓝 (𝓙 y)
 
 instance Default (Style α) where
-  def = Style NoStyleDefault 𝓝 𝓝 𝓝 𝓝
+  def = Style NoStyleDefault 𝓝 𝓝 𝓝 𝓝 𝓝 𝓝
 
 instance Show α => Printable (Style α) where print s = P.string (show s)
 
 instance ToFormat α => ToFormat (Style α) where
   toFormat s =
-    let pieces = [ [fmt|%T|] ⊳ (s ⊣ rangeStyle)
-                 , [fmt|%T|] ⊳ (s ⊣ listStyle)
-                 , [fmt|%T|] ⊳ (s ⊣ alignStyle)
-                 , toText ∘ toFormat ⊳ (s ⊣ stylePayload_)
-                 , case s ⊣ styleDefault of
+    let pieces = [ case s ⊣ styleDefault of
                      StyleDefault   → 𝓙 "default"
                      NoStyleDefault → 𝓝
+                 , [fmt|%T|] ⊳ (s ⊣ rangeStyle)
+                 , [fmt|%T|] ⊳ (s ⊣ listStyle)
+                 , [fmt|%T|] ⊳ (s ⊣ alignStyle)
+                 , [fmt|fg=colour%T|] ⊳ (s ⊣ fg)
+                 , [fmt|bg=colour%T|] ⊳ (s ⊣ bg)
+                 , toText ∘ toFormat ⊳ (s ⊣ stylePayload_)
                  ]
         payload = "" ⧐ (s ⊣ listStyle ≫ listPayload)
     in  Format $ [fmt|#[%t]%t|] (T.intercalate " " $ catMaybes pieces) payload
@@ -492,11 +580,13 @@ data TMuxFormatTyped α = (Show α, ToFormat α, IsVariable α) => TMFV α
                        | -- conditional
                          TMFC BoolExpr (𝕄 (TMuxFormatTyped α))
                                        (𝕄 (TMuxFormatTyped α))
+                       | TMFN NatExpr
 
 instance Show (TMuxFormatTyped α) where
   show (TMFV v)          = [fmt|TMFV: %w|] v
   show (TMFY y)          = [fmt|TMFY: %w|] y
   show (TMFS s)          = [fmt|TMFS: %w|] s
+  show (TMFN n)          = [fmt|TMFN: %w|] n
   show (TMFF (Format f)) = [fmt|TMFF: %w|] f
   show (TMFC p t e)      = [fmt|TMFC: %w %w %w|] p t e
 
@@ -518,6 +608,7 @@ instance Printable (TMuxFormatTyped α) where
 
 data TMuxFormat = ∀ α . TMFT (TMuxFormatTyped α)
                 | TMFB BoolExpr
+                | TMFZ NatExpr
                 | TMFL [TMuxFormat]
                 | {-| ‘S:’, ‘W:’, ‘P:’ or ‘L:’ will loop over each session,
                       window, pane or client  and  insert the format once for
@@ -547,6 +638,7 @@ instance ToFormat TMuxFormat where
 
 instance Printable TMuxFormat where
   print (TMFT t) = print t
+  print (TMFZ z) = print z
   print (TMFB b) = P.text ∘ unFormat $ toFormat b
   print (TMFL l) = P.text ∘ ю $ toText ⊳ l
   print (TMF_W w 𝓝)      = P.text $ [fmt|#{W:%T}|] (toText w)
@@ -640,6 +732,8 @@ instance TMuxFormatable FormatVariable where
   tmf = tmfv
 instance TMuxFormatable UserVariable where
   tmf = tmfv
+instance TMuxFormatable NatExpr where
+  tmf = TMFZ
 
 ------------------------------------------------------------
 --             miscellaneous building blocks              --
@@ -801,21 +895,45 @@ optionName t =
 
 ------------------------------------------------------------
 
+class ToTextss α where
+  toTextss ∷ α → [[𝕋]]
+
 data TMuxConfig = SetOption OptionName OptionFlags TMuxFormat
                 | SetOptionL OptionName OptionFlags [TMuxFormat]
 
+{-
 instance Printable TMuxConfig where
   print (SetOption opt_name opt_flags tmux_format) =
-    P.text $ [fmt|set-option %T %T "%T"|] opt_flags opt_name tmux_format
+    P.text $ [fmt|set-option %T %T %q|] opt_flags opt_name tmux_format
   print (SetOptionL opt_name opt_flags formats) =
-    let fmtF (i,t) = [fmtT|set-option[%d] %T %T "%T"|] i opt_flags opt_name t
+    let fmtF (i,t) = [fmtT|set-option %T %T[%d] %q|] opt_flags opt_name i t
     in  P.text $ T.intercalate "\n" $ fmtF ⊳ zip [(0∷ℕ)..] formats
+-}
+
+instance ToTextss TMuxConfig where
+  toTextss (SetOption opt_name opt_flags tmux_format) =
+    [[ "set-option", toText opt_flags, toText opt_name, [fmt|%q|] tmux_format ]]
+  toTextss (SetOptionL opt_name opt_flags formats) =
+    let fmtF (i,t) =
+          ["set-option",toText opt_flags, [fmt|%T[%d]|] opt_name i, [fmt|%q|] t]
+    in  fmtF ⊳ zip [(0∷ℕ)..] formats
 
 ------------------------------------------------------------
 
-main :: IO ()
-main =
--- CR mpearce: status-format[1]
+-- status-{left,right}
+-- /nix/store/8v78vjs9qwl51z4c6lafakx2fhkp90qk-tmuxplugin-powerline-3.0.0/share/tmux-plugins/powerline/powerline.sh left
+
+(‼) ∷ (MonadIO μ, MonadReader δ μ, HasDoMock δ, ToMLCmdSpec (α, β) (),
+       AsIOError ε, AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
+       Printable ε, MonadError ε μ, MonadLog (Log MockIOClass) μ) =>
+      α → β → μ ()
+cmd ‼ args = ꙩ (cmd,args) ≫ return ∘ snd
+
+myMain ∷ ∀ ε .
+         (HasCallStack, AsIOError ε, AsFPathError ε, AsCreateProcError ε,
+          AsProcExitError ε, Printable ε) ⇒
+         Options → LoggingT (Log MockIOClass) (ExceptT ε IO) Word8
+myMain _ = flip runReaderT NoMock $ do -- copied from /home/martyn/nix/scripts/src/mid.hs
   let status_format =
         SetOptionL (optionName "status-format") (OptionFlags OptionScopeGlobal)
                   [ tmf lrBar
@@ -824,8 +942,32 @@ main =
                                         (𝓙 $ windowFormat IsCurrent)
                         ]
                   ]
-  in  say status_format
+  let set_two_rows ∷ TMuxConfig = SetOption (optionName "status")
+                                            (OptionFlags OptionScopeGlobal)
+                                            (tmf $ NatLit 2)
+  forM_ (toTextss set_two_rows) (tmux ‼)
+  (_,stdout) ← ꙩ (tmux,["display-message"∷𝕋, "-p", "#S:#I.#P"])
+  let xx ∷ 𝕋 = [fmt|%T %t %T%t|] (tmf $ ꝏ & fg ⊩ Colour8 234 & bg ⊩ Colour8 148 & styleDef) stdout (tmf $ ꝏ & fg ⊩ Colour8 148 & bg ⊩ Colour8 90 & styleDef) (separator (𝓡()) Bold)
+  tmux ‼ ["display-message", xx]
+  return 0
 
+data BoldThin = Bold | Thin
+data PatchedFontInUse = PatchedFontInUse | NoPatchedFontInUse
+
+patchedFontInUse = PatchedFontInUse
+
+separator ∷ 𝔼 () () → BoldThin → 𝕋
+separator (𝓛 ()) Bold = case patchedFontInUse of
+  PatchedFontInUse → "\xe0b2" -- 
+separator (𝓡 ()) Bold = case patchedFontInUse of
+  PatchedFontInUse → "\xe0b0" -- 
+
+
+main ∷ IO ()
+main = do
+  let progDesc ∷ 𝕋 = "tmux config & helper"
+      my_main = myMain @UsageFPProcIOError
+  getArgs ≫ (\ args → stdMainNoDR progDesc parseOptions my_main args)
 
 --------------------------------------------------------------------------------
 --                                   tests                                    --
@@ -885,7 +1027,7 @@ tests = localOption Never $
                , "#[pop-default]" ]
            , tmf $ saveDefault (maxLen StatusLeftLength StatusLeft)
            )
-         , ( ю [ "#[norange default]"
+         , ( ю [ "#[default norange]"
                , "#[range=right nolist align=right #{E:status-right-style}]"
                ]
            , tmf [ tmf $ ꝏ & rangeNone & styleDef
@@ -980,7 +1122,7 @@ tests = localOption Never $
              in  tmf $ ð & rangeWinIY & listFocus ≈ payload
            )
 
-         , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}"
+         , ( ю [ "#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[default norange]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}},#{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}},#{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}},#{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[default norange list=on]#{?window_end_flag,,#{window-status-separator}}}"
                ]
            , {-| the status line for each window, notably showing its
                  number, running program, and directory -}
@@ -995,7 +1137,7 @@ tests = localOption Never $
                    , "#{T;=/#{status-left-length}:status-left}"
                    , "#[pop-default]"
                    ]
-               , "#[norange default]"
+               , "#[default norange]"
                , "#[range=right nolist align=right #{E:status-right-style}]"
                , ю [ "#[push-default]"
                    , "#{T;=/#{status-right-length}:status-right}"
