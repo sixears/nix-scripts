@@ -16,30 +16,43 @@ import Prelude  ( error )
 
 import Data.Char      ( isAlphaNum )
 import Data.Function  ( flip )
-import Data.List      ( intercalate, reverse, sortOn, zip )
+import Data.List      ( intercalate, repeat, reverse, sortOn, zip, zipWith )
 import Data.Maybe     ( catMaybes )
 
 import Control.Lens.Lens  ( Lens )
+
+-- domainnames -------------------------
+
+import DomainNames.Hostname  ( hostlocal )
+
+-- exceptions --------------------------
+
+import Control.Monad.Catch  ( MonadMask )
 
 -- fpath -------------------------------
 
 import FPath.AbsFile           ( AbsFile, absfile )
 import FPath.Error.FPathError  ( AsFPathError )
 
--- log ---------------------------------
+-- lens --------------------------------
 
-import Control.Monad.Log  ( MonadLog )
+import Control.Lens.Tuple ( _2 )
 
 -- logging-effect ----------------------
 
-import Control.Monad.Log  ( LoggingT )
+import Control.Monad.Log  ( LoggingT, MonadLog, Severity( Informational ) )
 
 -- log-plus ----------------------------
 
 import Log  ( Log )
 
+-- mockio-cmds-inetutils ---------------
+
+import MockIO.Cmds.InetUtils.Hostname  ( hostname )
+
 -- mockio-log --------------------------
 
+import MockIO.Log          ( logit )
 import MockIO.MockIOClass  ( MockIOClass )
 import MockIO.DoMock       ( DoMock( NoMock ), HasDoMock )
 
@@ -63,17 +76,25 @@ import Data.MoreUnicode.Maybe   ( pattern 𝓙, pattern 𝓝, (⧐) )
 
 -- mtl ---------------------------------
 
-import Control.Monad.Reader  ( MonadReader, runReaderT )
+import Control.Monad.Reader  ( MonadReader, ReaderT, runReaderT )
+
+-- natural -----------------------------
+
+import Natural.Length  ( ỻ )
 
 -- optparse-applicative ----------------
 
--- import Options.Applicative.Builder  ( argument, flag, help, long, metavar )
 import Options.Applicative.Types    ( Parser )
+
+-- safe --------------------------------
+
+import Safe  ( tailSafe )
 
 -- stdmain -----------------------------
 
-import StdMain             ( stdMainNoDR )
-import StdMain.UsageError  ( UsageFPProcIOError )
+import StdMain                       ( stdMainNoDR )
+import StdMain.ProcOutputParseError  ( AsProcOutputParseError, ScriptError
+                                     , UsageParseFPProcIOOPError)
 
 -- tasty -------------------------------
 
@@ -101,6 +122,15 @@ import qualified Text.Printer  as P
 
 ð ∷ Default α => α
 ð = def
+
+{-| for testing mock/log commands
+
+    e.g., `runCmd $ hostname Informational`
+-}
+runCmd ∷ ∀ α μ . (MonadIO μ, MonadMask μ) =>
+         ExceptT ScriptError (LoggingT (Log MockIOClass) (ReaderT DoMock μ)) α
+       → μ (𝔼 ScriptError α)
+runCmd = flip runReaderT NoMock ∘ logit @ScriptError
 
 tmux ∷ AbsFile
 tmux = [absfile|/home/martyn/.nix-profiles/default/bin/tmux|]
@@ -412,6 +442,7 @@ listPayload ListNone            = 𝓝
 
 ------------------------------------------------------------
 
+-- tmux' colour nummbers, run tmux-colours to see them all
 newtype Colour8 = Colour8 Word8  deriving Show
 
 instance Printable Colour8 where print (Colour8 c) = P.text $ [fmt|%d|] c
@@ -901,15 +932,6 @@ class ToTextss α where
 data TMuxConfig = SetOption OptionName OptionFlags TMuxFormat
                 | SetOptionL OptionName OptionFlags [TMuxFormat]
 
-{-
-instance Printable TMuxConfig where
-  print (SetOption opt_name opt_flags tmux_format) =
-    P.text $ [fmt|set-option %T %T %q|] opt_flags opt_name tmux_format
-  print (SetOptionL opt_name opt_flags formats) =
-    let fmtF (i,t) = [fmtT|set-option %T %T[%d] %q|] opt_flags opt_name i t
-    in  P.text $ T.intercalate "\n" $ fmtF ⊳ zip [(0∷ℕ)..] formats
--}
-
 instance ToTextss TMuxConfig where
   toTextss (SetOption opt_name opt_flags tmux_format) =
     [[ "set-option", toText opt_flags, toText opt_name, [fmt|%q|] tmux_format ]]
@@ -917,6 +939,9 @@ instance ToTextss TMuxConfig where
     let fmtF (i,t) =
           ["set-option",toText opt_flags, [fmt|%T[%d]|] opt_name i, [fmt|%q|] t]
     in  fmtF ⊳ zip [(0∷ℕ)..] formats
+
+instance ToTextss [TMuxConfig] where
+  toTextss cs = ю (toTextss ⊳ cs)
 
 ------------------------------------------------------------
 
@@ -931,24 +956,51 @@ cmd ‼ args = ꙩ (cmd,args) ≫ return ∘ snd
 
 myMain ∷ ∀ ε .
          (HasCallStack, AsIOError ε, AsFPathError ε, AsCreateProcError ε,
-          AsProcExitError ε, Printable ε) ⇒
+          AsProcOutputParseError ε, AsProcExitError ε, Printable ε) ⇒
          Options → LoggingT (Log MockIOClass) (ExceptT ε IO) Word8
-myMain _ = flip runReaderT NoMock $ do -- copied from /home/martyn/nix/scripts/src/mid.hs
+myMain _ = flip runReaderT NoMock $ do
   let status_format =
-        SetOptionL (optionName "status-format") (OptionFlags OptionScopeGlobal)
-                  [ tmf lrBar
-                  , tmf [ listAlignMark (AlignOpt StatusJustify) "<" ">"
-                        , forEachWindow (windowFormat NotCurrent)
-                                        (𝓙 $ windowFormat IsCurrent)
-                        ]
-                  ]
-  let set_two_rows ∷ TMuxConfig = SetOption (optionName "status")
-                                            (OptionFlags OptionScopeGlobal)
-                                            (tmf $ NatLit 2)
-  forM_ (toTextss set_two_rows) (tmux ‼)
-  (_,stdout) ← ꙩ (tmux,["display-message"∷𝕋, "-p", "#S:#I.#P"])
-  let xx ∷ 𝕋 = [fmt|%T %t %T%t|] (tmf $ ꝏ & fg ⊩ Colour8 234 & bg ⊩ Colour8 148 & styleDef) stdout (tmf $ ꝏ & fg ⊩ Colour8 148 & bg ⊩ Colour8 90 & styleDef) (separator (𝓡()) Bold)
-  tmux ‼ ["display-message", xx]
+        let formats = [ tmf lrBar
+                      , tmf [ listAlignMark (AlignOpt StatusJustify) "<" ">"
+                            , forEachWindow (windowFormat NotCurrent)
+                                            (𝓙 $ windowFormat IsCurrent)
+                            ]
+                      ]
+        in  [ SetOptionL (optionName "status-format")
+                         (OptionFlags OptionScopeGlobal) formats
+            , SetOption (optionName "status") (OptionFlags OptionScopeGlobal)
+                        (tmf $ NatLit (ỻ formats))
+            ]
+
+      -- these are tmux' colour nummbers, run tmux-colours to see them all
+      colours_left = [ (Colour8 234 {- black -}, Colour8 148 {- yellow -})
+                     , (Colour8 255 {- white -}, Colour8  90 {- magenta -})
+                     ]
+
+      colours_left_bg = (⊣ _2) ⊳ colours_left
+      colours_left_bg' = tail colours_left
+
+  forM_ (toTextss status_format) (tmux ‼)
+  host ← hostname Informational
+  -- SessionName:WindowIndex.PaneIndex
+  (_,[sess_win_pane∷𝕋]) ← ꙩ (tmux,["display-message"∷𝕋, "-p", "#S:#I.#P"])
+  let col_fmt t fg_ bg_ =
+        [fmtT|%T%T|] (tmf $ ꝏ & fg ⊩ fg_ & bg ⊩ bg_ & styleDef) t
+      vals_left = zipWith (\ t (fg_,bg_) → col_fmt t fg_ bg_)
+                          [ (" " ◇ sess_win_pane ◇ " "), toText $ hostlocal host ] colours_left
+      seps_left = zipWith (col_fmt $ separator (𝓛()) Bold)
+                          ((⊣ _2) ⊳ colours_left)
+                          (((⊣ _2) ⊳ tailSafe colours_left) ◇ [Colour8 0])
+  mapM_ (say ∘ show) vals_left
+  mapM_ (say ∘ show) seps_left
+  mapM_ (say ∘ show) (ю $ zipWith (\ a b → [a,b]) vals_left seps_left)
+  let yy ∷ 𝕋 = ю ∘ ю $ zipWith (\ a b → [a,b]) vals_left seps_left
+  let xx ∷ 𝕋 = ю [ -- [fmt|%T%t|] (tmf $ ꝏ & fg ⊩ Colour8 234 & bg ⊩ Colour8 148 & styleDef) (" " ◇ sess_win_pane ◇ " ")
+        col_fmt (" " ◇ sess_win_pane ◇ " ") (Colour8 234) (Colour8 148)
+        , [fmt|%T%t|] (tmf $ ꝏ & fg ⊩ Colour8 148 & bg ⊩ Colour8 90 & styleDef) (separator (𝓛()) Bold)
+                 ]
+  -- tmux ‼ ["display-message", xx]
+  tmux ‼ ["display-message", yy]
   return 0
 
 data BoldThin = Bold | Thin
@@ -957,17 +1009,17 @@ data PatchedFontInUse = PatchedFontInUse | NoPatchedFontInUse
 patchedFontInUse = PatchedFontInUse
 
 separator ∷ 𝔼 () () → BoldThin → 𝕋
-separator (𝓛 ()) Bold = case patchedFontInUse of
-  PatchedFontInUse → "\xe0b2" -- 
 separator (𝓡 ()) Bold = case patchedFontInUse of
+  PatchedFontInUse → "\xe0b2" -- 
+separator (𝓛 ()) Bold = case patchedFontInUse of
   PatchedFontInUse → "\xe0b0" -- 
-
 
 main ∷ IO ()
 main = do
   let progDesc ∷ 𝕋 = "tmux config & helper"
-      my_main = myMain @UsageFPProcIOError
+      my_main = myMain @UsageParseFPProcIOOPError
   getArgs ≫ (\ args → stdMainNoDR progDesc parseOptions my_main args)
+
 
 --------------------------------------------------------------------------------
 --                                   tests                                    --
