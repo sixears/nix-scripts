@@ -14,12 +14,20 @@ import Prelude  ( error )
 
 -- base --------------------------------
 
-import Data.Char      ( isAlphaNum )
-import Data.Function  ( flip )
-import Data.List      ( intercalate, repeat, reverse, sortOn, zip, zipWith )
-import Data.Maybe     ( catMaybes )
+import Data.Bool       ( bool )
+import Data.Char       ( isAlphaNum )
+import Data.Function   ( flip )
+import Data.List       ( intercalate, repeat, reverse, sortOn, zip, zipWith )
+import Data.Maybe      ( catMaybes )
+import System.Timeout  ( timeout )
 
-import Control.Lens.Lens  ( Lens )
+-- base-unicode-symbols ----------------
+
+import Prelude.Unicode  ( (×) )
+
+-- bytestring --------------------------
+
+import Data.ByteString.Lazy  qualified as LBS
 
 -- domainnames -------------------------
 
@@ -34,8 +42,19 @@ import Control.Monad.Catch  ( MonadMask )
 import FPath.AbsFile           ( AbsFile, absfile )
 import FPath.Error.FPathError  ( AsFPathError )
 
+-- http-client -------------------------
+
+import Network.HTTP.Client      ( httpLbs, newManager, parseRequest
+                                , responseBody )
+import Network.HTTP.Client.TLS  ( tlsManagerSettings )
+
+-- ip4 ---------------------------------
+
+import IP4  ( IP4 )
+
 -- lens --------------------------------
 
+import Control.Lens.Lens  ( Lens )
 import Control.Lens.Tuple ( _2 )
 
 -- logging-effect ----------------------
@@ -70,9 +89,10 @@ import MonadIO.Error.ProcExitError    ( AsProcExitError )
 
 -- more-unicode ------------------------
 
+import Data.MoreUnicode.Bool    ( pattern 𝓣, pattern 𝓕 )
 import Data.MoreUnicode.Either  ( pattern 𝓛, pattern 𝓡 )
 import Data.MoreUnicode.Lens    ( (⊩) )
-import Data.MoreUnicode.Maybe   ( pattern 𝓙, pattern 𝓝, (⧐) )
+import Data.MoreUnicode.Maybe   ( pattern 𝓙, pattern 𝓝, (⧐), (⧏) )
 
 -- mtl ---------------------------------
 
@@ -85,6 +105,20 @@ import Natural.Length  ( ỻ )
 -- optparse-applicative ----------------
 
 import Options.Applicative.Types    ( Parser )
+
+-- parsec-plus -------------------------
+
+import ParsecPlus  ( ParseError, parser, parse )
+
+-- parsers -----------------------------
+
+import Text.Parser.Combinators  ( eof )
+
+-- pcre --------------------------------
+
+import PCRE          ( PCRE, compRE )
+import PCRE.Error    ( AsREParseError, PCREScriptError )
+import PCRE.REMatch  ( (~~) )
 
 -- safe --------------------------------
 
@@ -114,11 +148,16 @@ import TastyPlus  ( runTestsP, runTestsReplay, runTestTree )
 
 import Data.Text  qualified as  T
 
+import Data.Text.Encoding  ( decodeUtf8 )
+
 -- text-printer ------------------------
 
 import qualified Text.Printer  as P
 
 --------------------------------------------------------------------------------
+
+(~~~) ∷ 𝕋 → PCRE → 𝕄 𝕋
+t ~~~ r = bool 𝓝 (𝓙 t) (t ~~ r)
 
 ð ∷ Default α => α
 ð = def
@@ -920,7 +959,7 @@ newtype OptionName = OptionName 𝕋 deriving Printable
 
 optionName ∷ 𝕋 → OptionName
 optionName t =
-  if T.filter (\ c → isAlphaNum c ∨ c ∈ "-_") t == t
+  if T.filter (\ c → isAlphaNum c ∨ c ∈ ("-_"∷𝕋)) t == t
   then OptionName t
   else error $ "illegal option name: '" ◇ T.unpack t ◇ "'"
 
@@ -947,6 +986,20 @@ instance ToTextss [TMuxConfig] where
 
 -- status-{left,right}
 -- /nix/store/8v78vjs9qwl51z4c6lafakx2fhkp90qk-tmuxplugin-powerline-3.0.0/share/tmux-plugins/powerline/powerline.sh left
+{-
+λ> :!tmux display-message -p "#{status-left}"
+#[fg=colour234,bg=colour148] #S:#I.#P #[default]#[fg=colour148,bg=colour90]#(/nix/store/8v78vjs9qwl51z4c6lafakx2fhkp90qk-tmuxplugin-powerline-3.0.0/share/tmux-plugins/powerline/powerline.sh left)
+*Main MockIO.Cmds.InetUtils.Paths Control.Lens Data.List Safe Data.Function Data.Tuple
+λ> :!tmux display-message -p "#{status-right}"
+#(/nix/store/8v78vjs9qwl51z4c6lafakx2fhkp90qk-tmuxplugin-powerline-3.0.0/share/tmux-plugins/powerline/powerline.sh right)
+-}
+
+httpReq url timeoutμs = liftIO $ do
+  manager ← newManager tlsManagerSettings
+  request ← parseRequest url
+  timeout timeoutμs $ do
+    response ← httpLbs request manager
+    return ∘ decodeUtf8 ∘ LBS.toStrict $ responseBody response
 
 (‼) ∷ (MonadIO μ, MonadReader δ μ, HasDoMock δ, ToMLCmdSpec (α, β) (),
        AsIOError ε, AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
@@ -975,6 +1028,7 @@ myMain _ = flip runReaderT NoMock $ do
       -- these are tmux' colour nummbers, run tmux-colours to see them all
       colours_left = [ (Colour8 234 {- black -}, Colour8 148 {- yellow -})
                      , (Colour8 255 {- white -}, Colour8  90 {- magenta -})
+                     , (Colour8 255 {- white -}, Colour8  24 {- dusky blue -})
                      ]
 
       colours_left_bg = (⊣ _2) ⊳ colours_left
@@ -982,25 +1036,37 @@ myMain _ = flip runReaderT NoMock $ do
 
   forM_ (toTextss status_format) (tmux ‼)
   host ← hostname Informational
+--  re ← compRE "^(?:\\d+)\\.(?:\\d+)\\.(?:\\d+)\\.(?:\\d+)$"
+  -- XXX remove text annotation
+  wan_ip ← (either (\ e → "ERR: " ◇ T.take 12 (toText e)) toText ∘ parse @ParseError (parser @IP4 ⋪ eof) "whatismyip.akamai.com") ⊳⊳ httpReq "http://whatismyip.akamai.com" 2_000_000
+
+{-
+  wan_ip ← do wan_ip ← httpReq "http://whatismyip.akamai.com" 2_000_000
+              return $ case re ≈ wan_ip of
+                 𝓣 → 𝓙 wan_ip
+                 𝓕 → 𝓝
+-}
+
   -- SessionName:WindowIndex.PaneIndex
+  -- WE SHOULD SET THE STATUS TO USE #S, etc., RATHER THAN CALLING THIS
   (_,[sess_win_pane∷𝕋]) ← ꙩ (tmux,["display-message"∷𝕋, "-p", "#S:#I.#P"])
   let col_fmt t fg_ bg_ =
         [fmtT|%T%T|] (tmf $ ꝏ & fg ⊩ fg_ & bg ⊩ bg_ & styleDef) t
-      vals_left = zipWith (\ t (fg_,bg_) → col_fmt t fg_ bg_)
-                          [ (" " ◇ sess_win_pane ◇ " "), toText $ hostlocal host ] colours_left
+      vals_left = let spaces t = " " ◇ t ◇ " "
+                  in  zipWith (\ t (fg_,bg_) → col_fmt t fg_ bg_)
+                              (spaces ⊳ [ sess_win_pane
+                                        , toText $ hostlocal host
+--                                        , {- case -} join ((~~~ re) ⊳ wan_ip) {- of 𝓙 𝓣 → wan_ip -} ⧏ "UNKNOWN"
+                                        , {- case -} ({- toText ⊳ -} wan_ip) {- of 𝓙 𝓣 → wan_ip -} ⧏ "UNKNOWN"
+                                        ])
+                              colours_left
       seps_left = zipWith (col_fmt $ separator (𝓛()) Bold)
                           ((⊣ _2) ⊳ colours_left)
                           (((⊣ _2) ⊳ tailSafe colours_left) ◇ [Colour8 0])
-  mapM_ (say ∘ show) vals_left
-  mapM_ (say ∘ show) seps_left
-  mapM_ (say ∘ show) (ю $ zipWith (\ a b → [a,b]) vals_left seps_left)
-  let yy ∷ 𝕋 = ю ∘ ю $ zipWith (\ a b → [a,b]) vals_left seps_left
-  let xx ∷ 𝕋 = ю [ -- [fmt|%T%t|] (tmf $ ꝏ & fg ⊩ Colour8 234 & bg ⊩ Colour8 148 & styleDef) (" " ◇ sess_win_pane ◇ " ")
-        col_fmt (" " ◇ sess_win_pane ◇ " ") (Colour8 234) (Colour8 148)
-        , [fmt|%T%t|] (tmf $ ꝏ & fg ⊩ Colour8 148 & bg ⊩ Colour8 90 & styleDef) (separator (𝓛()) Bold)
-                 ]
-  -- tmux ‼ ["display-message", xx]
-  tmux ‼ ["display-message", yy]
+  let left_status = ю ∘ ю $
+          zipWith (\ a b → [a,b]) vals_left seps_left
+        ◇ [[toText ∘ tmf $ꝏ & styleDef ]]
+  tmux ‼ ["display-message", left_status]
   return 0
 
 data BoldThin = Bold | Thin
@@ -1008,16 +1074,30 @@ data PatchedFontInUse = PatchedFontInUse | NoPatchedFontInUse
 
 patchedFontInUse = PatchedFontInUse
 
+separator' ∷ PatchedFontInUse → 𝔼 () () → BoldThin → 𝕋
+separator' PatchedFontInUse (𝓡 ()) Bold = "\xe0b2" -- 
+separator' PatchedFontInUse (𝓛 ()) Bold = "\xe0b0" -- 
+separator' PatchedFontInUse (𝓡 ()) Thin = "\xe0b3" -- 
+separator' PatchedFontInUse (𝓛 ()) Thin = "\xe0b1" -- 
+separator' NoPatchedFontInUse (𝓡 ()) Bold = "\x25c0" -- ◀
+separator' NoPatchedFontInUse (𝓛 ()) Bold = "\x25b6" -- ▶
+separator' NoPatchedFontInUse (𝓡 ()) Thin = "\x276e" -- ❮
+separator' NoPatchedFontInUse (𝓛 ()) Thin = "\x276f" -- ❯
+
 separator ∷ 𝔼 () () → BoldThin → 𝕋
 separator (𝓡 ()) Bold = case patchedFontInUse of
   PatchedFontInUse → "\xe0b2" -- 
 separator (𝓛 ()) Bold = case patchedFontInUse of
   PatchedFontInUse → "\xe0b0" -- 
+separator (𝓡 ()) Thin = case patchedFontInUse of
+  PatchedFontInUse → "\xe0b2" -- 
+separator (𝓛 ()) Thin = case patchedFontInUse of
+  PatchedFontInUse → "\xe0b0" -- 
 
 main ∷ IO ()
 main = do
   let progDesc ∷ 𝕋 = "tmux config & helper"
-      my_main = myMain @UsageParseFPProcIOOPError
+      my_main = myMain @UsageParseFPProcIOOPError -- @PCREScriptError
   getArgs ≫ (\ args → stdMainNoDR progDesc parseOptions my_main args)
 
 
