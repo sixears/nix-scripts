@@ -23,7 +23,7 @@ import System.Timeout  ( timeout )
 
 -- base-unicode-symbols ----------------
 
-import Prelude.Unicode  ( (×) )
+import Prelude.Unicode  ( (×), (≠) )
 
 -- bytestring --------------------------
 
@@ -101,6 +101,11 @@ import Control.Monad.Reader  ( MonadReader, ReaderT, runReaderT )
 -- natural -----------------------------
 
 import Natural.Length  ( ỻ )
+
+-- network-info ------------------------
+
+import Network.Info  qualified as  NI
+import Network.Info  ( getNetworkInterfaces )
 
 -- optparse-applicative ----------------
 
@@ -1029,6 +1034,7 @@ myMain _ = flip runReaderT NoMock $ do
       colours_left = [ (Colour8 234 {- black -}, Colour8 148 {- yellow -})
                      , (Colour8 255 {- white -}, Colour8  90 {- magenta -})
                      , (Colour8 255 {- white -}, Colour8  24 {- dusky blue -})
+                     , (Colour8 255 {- white -}, Colour8  24 {- dusky blue -})
                      ]
 
       colours_left_bg = (⊣ _2) ⊳ colours_left
@@ -1037,8 +1043,10 @@ myMain _ = flip runReaderT NoMock $ do
   forM_ (toTextss status_format) (tmux ‼)
   host ← hostname Informational
 --  re ← compRE "^(?:\\d+)\\.(?:\\d+)\\.(?:\\d+)\\.(?:\\d+)$"
-  -- XXX remove text annotation
+-- XXX don't even try if there is no route?
   wan_ip ← (either (\ e → "ERR: " ◇ T.take 12 (toText e)) toText ∘ parse @ParseError (parser @IP4 ⋪ eof) "whatismyip.akamai.com") ⊳⊳ httpReq "http://whatismyip.akamai.com" 2_000_000
+
+  lan_ips ← liftIO $ getNetworkInterfaces ⊲ \ nis → [NI.ipv4 ni | ni ← nis, NI.name ni ≠ "lo"]
 
 {-
   wan_ip ← do wan_ip ← httpReq "http://whatismyip.akamai.com" 2_000_000
@@ -1056,8 +1064,11 @@ myMain _ = flip runReaderT NoMock $ do
                   in  zipWith (\ t (fg_,bg_) → col_fmt t fg_ bg_)
                               (spaces ⊳ [ sess_win_pane
                                         , toText $ hostlocal host
---                                        , {- case -} join ((~~~ re) ⊳ wan_ip) {- of 𝓙 𝓣 → wan_ip -} ⧏ "UNKNOWN"
-                                        , {- case -} ({- toText ⊳ -} wan_ip) {- of 𝓙 𝓣 → wan_ip -} ⧏ "UNKNOWN"
+-- XXX insert thin rather than thick marker here
+                                        , "ⓛ " ◇ (case lan_ips of [] → "NONE"; _ → T.intercalate "," (T.pack ∘ show ⊳ lan_ips))
+-- XXX don't even try if there is no route?
+-- XXX just drop this if there is no wan_ip
+                                        , "ⓦ " ◇ (wan_ip ⧏ "UNKNOWN")
                                         ])
                               colours_left
       seps_left = zipWith (col_fmt $ separator (𝓛()) Bold)
