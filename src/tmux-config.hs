@@ -10,16 +10,20 @@
 
 import Base1
 
-import Prelude  ( error )
+import Prelude  ( Int, error )
 
 -- base --------------------------------
 
-import Data.Bool       ( bool )
-import Data.Char       ( isAlphaNum )
-import Data.Function   ( flip )
-import Data.List       ( intercalate, repeat, reverse, sortOn, zip, zipWith )
-import Data.Maybe      ( catMaybes )
-import System.Timeout  ( timeout )
+import Control.Exception  ( Handler( Handler ), SomeException
+                          , catch, catches, displayException )
+import Data.Bool          ( bool )
+import Data.Char          ( isAlphaNum, isAscii, isControl, isSpace )
+import Data.Function      ( flip )
+import Data.List          ( intercalate, repeat, reverse, sortOn, take, takeWhile
+                          , zip, zipWith )
+import Data.Maybe         ( catMaybes )
+import System.IO.Error    ( ioeGetErrorString )
+import System.Timeout     ( timeout )
 
 -- base-unicode-symbols ----------------
 
@@ -39,14 +43,17 @@ import Control.Monad.Catch  ( MonadMask )
 
 -- fpath -------------------------------
 
+import FPath.AbsDir            ( absdir )
 import FPath.AbsFile           ( AbsFile, absfile )
 import FPath.Error.FPathError  ( AsFPathError )
 
 -- http-client -------------------------
 
-import Network.HTTP.Client      ( httpLbs, newManager, parseRequest
-                                , responseBody )
-import Network.HTTP.Client.TLS  ( tlsManagerSettings )
+import Network.HTTP.Client          ( httpLbs, newManager, parseRequest
+                                    , responseBody )
+import Network.HTTP.Client.Internal ( HttpException( HttpExceptionRequest
+                                                   , InvalidUrlException ) )
+import Network.HTTP.Client.TLS      ( tlsManagerSettings )
 
 -- ip4 ---------------------------------
 
@@ -78,7 +85,11 @@ import MockIO.DoMock       ( DoMock( NoMock ), HasDoMock )
 -- mockio-plus -------------------------
 
 import MockIO.Process            ( ꙩ )
-import MockIO.Process.MLCmdSpec  ( ToMLCmdSpec )
+import MockIO.Process.MLCmdSpec  ( MLCmdSpec, ToMLCmdSpec )
+
+-- monaderror-io -----------------------
+
+import MonadError.IO.Error  ( AsIOError( _IOErr ), IOError, throwUserError )
 
 -- monadio-plus ------------------------
 
@@ -86,6 +97,8 @@ import MonadIO                        ( say )
 import MonadIO.Base                   ( getArgs )
 import MonadIO.Error.CreateProcError  ( AsCreateProcError )
 import MonadIO.Error.ProcExitError    ( AsProcExitError )
+import MonadIO.Process.CmdSpec        ( cwd )
+import MonadIO.Process.ExitInfo       ( ExitInfo )
 
 -- more-unicode ------------------------
 
@@ -169,15 +182,18 @@ t ~~~ r = bool 𝓝 (𝓙 t) (t ~~ r)
 
 {-| for testing mock/log commands
 
-    e.g., `runCmd $ hostname Informational`
+    e.g., `runCmd @ScriptError $ hostname Informational`
 -}
-runCmd ∷ ∀ α μ . (MonadIO μ, MonadMask μ) =>
-         ExceptT ScriptError (LoggingT (Log MockIOClass) (ReaderT DoMock μ)) α
-       → μ (𝔼 ScriptError α)
-runCmd = flip runReaderT NoMock ∘ logit @ScriptError
+runCmd ∷ ∀ ε α μ . (MonadIO μ, MonadMask μ) =>
+         ExceptT ε (LoggingT (Log MockIOClass) (ReaderT DoMock μ)) (ExitInfo,α)
+       → μ (𝔼 ε (ExitInfo,α))
+runCmd = flip runReaderT NoMock ∘ logit -- @ScriptError
 
 tmux ∷ AbsFile
 tmux = [absfile|/home/martyn/.nix-profiles/default/bin/tmux|]
+
+git ∷ AbsFile
+git = [absfile|/run/current-system/sw/bin/git|]
 
 ------------------------------------------------------------
 
@@ -337,6 +353,9 @@ data NatExpr = NatLit ℕ  deriving Show
 
 instance Printable NatExpr where
   print (NatLit n) = P.text $ [fmt|%d|] n
+
+instance ToFormat NatExpr where
+  toFormat nx = Format $ "NatExpr: [" ◇ T.pack (show nx) ◇ "]"
 
 ------------------------------------------------------------
 
@@ -670,6 +689,7 @@ instance ToFormat (TMuxFormatTyped α) where
 
 instance Printable (TMuxFormatTyped α) where
   print (TMFV v) = P.text ∘ unFormat $ toFormat v
+  print (TMFN v) = P.text ∘ unFormat $ toFormat v
   print (TMFY y) = P.text ∘ unFormat $ toFormat y
   print (TMFS s) = P.text ∘ unFormat $ toFormat s
   print (TMFF f) = P.text ∘ unFormat $ f
@@ -699,6 +719,7 @@ data TMuxFormat = ∀ α . TMFT (TMuxFormatTyped α)
 
 instance Show TMuxFormat where
   show (TMFT  t)    = "TMFT: "  ◇ show t
+  show (TMFZ  t)    = "TMFZ: "  ◇ show t
   show (TMFB  t)    = "TMFB: "  ◇ show t
   show (TMFL  ts)   = "TMFL: [" ◇ intercalate ", " (show ⊳ ts) ◇ "]"
   show (TMF_W x y)  = "TMF_W: " ◇ show x ◇ " " ◇ show y
@@ -999,12 +1020,37 @@ instance ToTextss [TMuxConfig] where
 #(/nix/store/8v78vjs9qwl51z4c6lafakx2fhkp90qk-tmuxplugin-powerline-3.0.0/share/tmux-plugins/powerline/powerline.sh right)
 -}
 
-httpReq url timeoutμs = liftIO $ do
-  manager ← newManager tlsManagerSettings
-  request ← parseRequest url
-  timeout timeoutμs $ do
-    response ← httpLbs request manager
-    return ∘ decodeUtf8 ∘ LBS.toStrict $ responseBody response
+{-| catch even "runtime" exceptions, throw them as UserErrors -}
+catchUserE ∷ ∀ ε α η . (AsIOError ε, MonadError ε η) ⇒ IO (η α) → IO (η α)
+catchUserE io = catch io (\ (e∷SomeException) → ѥ (throwUserError $ show e))
+
+----------------------------------------
+
+isSimpleAscii ∷ ℂ → 𝔹
+isSimpleAscii c = isAscii c ∧ ﬧ  (isControl c)
+
+httpReq ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ, HasCallStack) ⇒
+          𝕊 → Int → μ (𝕄 𝕋)
+httpReq url timeoutμs =
+  let catcher io =
+        let some_ex_h (e∷SomeException) =
+              let take_take      = take 20 ∘ takeWhile isSimpleAscii
+              in  ѥ (throwUserError ∘ take_take $ displayException e)
+
+            http_ex_h (e∷HttpException) =
+              case e of
+                HttpExceptionRequest _ ex → return $ throwUserError $ show ex
+                InvalidUrlException _ ex  → return $ throwUserError ex
+
+        in  catches io [ Handler http_ex_h, Handler some_ex_h ]
+  in  join ∘ liftIO ∘ catcher ∘ ѥ ∘ asIOError $ do
+        manager ← newManager tlsManagerSettings
+        request ← parseRequest url
+        timeout timeoutμs $ do
+          response ← httpLbs request manager
+          return ∘ decodeUtf8 ∘ LBS.toStrict $ responseBody response
+
+----------------------------------------
 
 (‼) ∷ (MonadIO μ, MonadReader δ μ, HasDoMock δ, ToMLCmdSpec (α, β) (),
        AsIOError ε, AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
@@ -1030,21 +1076,21 @@ myMain _ = flip runReaderT NoMock $ do
                         (tmf $ NatLit (ỻ formats))
             ]
 
-      -- these are tmux' colour nummbers, run tmux-colours to see them all
-      colours_left = [ (Colour8 234 {- black -}, Colour8 148 {- yellow -})
-                     , (Colour8 255 {- white -}, Colour8  90 {- magenta -})
-                     , (Colour8 255 {- white -}, Colour8  24 {- dusky blue -})
-                     , (Colour8 255 {- white -}, Colour8  24 {- dusky blue -})
+      -- these are tmux' colour numbers, run tmux-colours to see them all
+      colours_left = [ (Colour8 234    {- black -}, Colour8 148 {- yellow -})
+                     , (Colour8 255    {- white -}, Colour8  90 {- magenta -})
+                     , (Colour8 255    {- white -}, Colour8  24 {- dusky blue -})
+                     , (Colour8 255    {- white -}, Colour8  24 {- dusky blue -})
+                     , (Colour8  88 {- deep red -}, Colour8  29 {- grey blue -})
                      ]
 
-      colours_left_bg = (⊣ _2) ⊳ colours_left
-      colours_left_bg' = tail colours_left
-
+  -- emit a tmux command for each (set-option) in status_format
   forM_ (toTextss status_format) (tmux ‼)
+
   host ← hostname Informational
 --  re ← compRE "^(?:\\d+)\\.(?:\\d+)\\.(?:\\d+)\\.(?:\\d+)$"
 -- XXX don't even try if there is no route?
-  wan_ip ← (either (\ e → "ERR: " ◇ T.take 12 (toText e)) toText ∘ parse @ParseError (parser @IP4 ⋪ eof) "whatismyip.akamai.com") ⊳⊳ httpReq "http://whatismyip.akamai.com" 2_000_000
+  wan_ip ∷ 𝕋 ← ѥ ( {- ѥ @IOError ((either (\ e → "ERR: " ◇ T.take 12 (toText e)) toText ∘ parse @ParseError (parser @IP4 ⋪ eof) "whatismyip.akamai.com") ⊳⊳ -} httpReq "http://whatismyip.akamai.com" 2_000_000 ) ≫  \ case 𝓛 (e∷IOError) → return (maybe "-ERR-" (T.pack ∘ takeWhile (\ c → isSimpleAscii c ∧ ﬧ (isSpace c)) ∘ ioeGetErrorString) $ e ⩼ _IOErr); 𝓡 ip → return (ip ⧏ "UNKNOWN")
 
   lan_ips ← liftIO $ getNetworkInterfaces ⊲ \ nis → [NI.ipv4 ni | ni ← nis, NI.name ni ≠ "lo"]
 
@@ -1053,6 +1099,33 @@ myMain _ = flip runReaderT NoMock $ do
               return $ case re ≈ wan_ip of
                  𝓣 → 𝓙 wan_ip
                  𝓕 → 𝓝
+-}
+
+  (_, remote_origin∷𝕋) ←
+    let xx  ∷ MLCmdSpec ξ -> MLCmdSpec ξ;  xx = \ (mlcs) -> mlcs & cwd ⊢ 𝓙 [absdir|/home/martyn/src/hpkgs1/|]
+    in  ꙩ (git, ["config", "--get", "remote.origin.url"∷𝕋],xx {- @() -} @𝕋)
+
+{- VCS:
+[martyn:mockio-cmds-inetutils:0]$ basename -s .git `git config --get remote.origin.url`
+mockio-cmds-inetutils
+[martyn:mockio-cmds-inetutils:0]$ git config --get remote.origin.url
+git@github.com:sixears/mockio-cmds-inetutils.git
+[martyn:mockio-cmds-inetutils:0]$ git symbolic-ref HEAD
+refs/heads/master
+[martyn:mockio-cmds-inetutils:0]$ git rev-parse --short HEAD
+6c99717
+
+	branch=${branch#refs\/heads\/}
+	branch=$(__truncate_branch_name $branch)
+
+__truncate_branch_name() {
+	trunc_symbol="…"
+	branch=$(echo $1 | sed "s/\(.\{$TMUX_POWERLINE_SEG_VCS_BRANCH_MAX_LEN\}\).*/\1$trunc_symbol/")
+	echo -n $branch
+}
+-}
+{-
+disk_usage:
 -}
 
   -- SessionName:WindowIndex.PaneIndex
@@ -1068,7 +1141,8 @@ myMain _ = flip runReaderT NoMock $ do
                                         , "ⓛ " ◇ (case lan_ips of [] → "NONE"; _ → T.intercalate "," (T.pack ∘ show ⊳ lan_ips))
 -- XXX don't even try if there is no route?
 -- XXX just drop this if there is no wan_ip
-                                        , "ⓦ " ◇ (wan_ip ⧏ "UNKNOWN")
+                                        , "ⓦ " ◇ (wan_ip {- ⧏ "UNKNOWN" -})
+                                        , remote_origin
                                         ])
                               colours_left
       seps_left = zipWith (col_fmt $ separator (𝓛()) Bold)
@@ -1076,14 +1150,12 @@ myMain _ = flip runReaderT NoMock $ do
                           (((⊣ _2) ⊳ tailSafe colours_left) ◇ [Colour8 0])
   let left_status = ю ∘ ю $
           zipWith (\ a b → [a,b]) vals_left seps_left
-        ◇ [[toText ∘ tmf $ꝏ & styleDef ]]
+        ◇ [[toText ∘ tmf $ ꝏ & styleDef ]]
   tmux ‼ ["display-message", left_status]
   return 0
 
 data BoldThin = Bold | Thin
 data PatchedFontInUse = PatchedFontInUse | NoPatchedFontInUse
-
-patchedFontInUse = PatchedFontInUse
 
 separator' ∷ PatchedFontInUse → 𝔼 () () → BoldThin → 𝕋
 separator' PatchedFontInUse (𝓡 ()) Bold = "\xe0b2" -- 
@@ -1096,14 +1168,7 @@ separator' NoPatchedFontInUse (𝓡 ()) Thin = "\x276e" -- ❮
 separator' NoPatchedFontInUse (𝓛 ()) Thin = "\x276f" -- ❯
 
 separator ∷ 𝔼 () () → BoldThin → 𝕋
-separator (𝓡 ()) Bold = case patchedFontInUse of
-  PatchedFontInUse → "\xe0b2" -- 
-separator (𝓛 ()) Bold = case patchedFontInUse of
-  PatchedFontInUse → "\xe0b0" -- 
-separator (𝓡 ()) Thin = case patchedFontInUse of
-  PatchedFontInUse → "\xe0b2" -- 
-separator (𝓛 ()) Thin = case patchedFontInUse of
-  PatchedFontInUse → "\xe0b0" -- 
+separator = separator' PatchedFontInUse
 
 main ∷ IO ()
 main = do
