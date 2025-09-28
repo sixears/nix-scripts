@@ -48,9 +48,10 @@ import Control.Monad.Catch  ( MonadMask )
 
 -- fpath -------------------------------
 
-import FPath.AbsDir            ( absdir )
+import FPath.AbsDir            ( AbsDir, absdir )
 import FPath.AbsFile           ( AbsFile, absfile )
-import FPath.Error.FPathError  ( AsFPathError )
+import FPath.Error.FPathError  ( AsFPathError, FPathError )
+import FPath.Parseable         ( Parseable, parseDir, readM )
 
 -- http-client -------------------------
 
@@ -127,7 +128,8 @@ import Network.Info  ( getNetworkInterfaces )
 
 -- optparse-applicative ----------------
 
-import Options.Applicative.Types    ( Parser )
+import Options.Applicative        ( argument, eitherReader, metavar )
+import Options.Applicative.Types  ( Parser, ReadM )
 
 -- parsec-plus-base --------------------
 
@@ -209,12 +211,21 @@ git = [absfile|/run/current-system/sw/bin/git|]
 
 data Options = Options { -- _mode   ∷ Mode
                          -- , _inputs ∷ NonEmpty File
+                         _dir ∷ AbsDir
                        }
+
+dir ∷ Lens' Options AbsDir
+dir = lens _dir (\ o d → o { _dir = d })
 
 ----------------------------------------
 
+-- add this to FPath.Parseable
+readMDir ∷ Parseable χ ⇒ ReadM χ
+readMDir = eitherReader (first toString ∘ parseDir @_ @FPathError)
+
 parseOptions ∷ Parser Options
-parseOptions = pure Options
+parseOptions = -- pure Options
+  Options ⊳ argument readMDir (metavar "DIR")
 {-
   Options ⊳ ( flag (ModeParsed Human) ModeRaw
                    (long "raw" ⊕ help "output all ID_ tags")
@@ -1100,6 +1111,30 @@ wanIP =
         𝓡 (𝓙 r) → toText r
         𝓡 𝓝     → "NONE"
 
+----------------------------------------
+
+remoteOriginBase ∷ ∀ ε δ μ .
+                   (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+                    AsProcExitError ε, AsREParseError ε, AsCreateProcError ε,
+                    AsFPathError ε, AsIOError ε, Printable ε, MonadError ε μ,
+                    MonadLog (Log MockIOClass) μ) ⇒
+                   AbsDir → μ 𝕋
+remoteOriginBase dir = do
+  (_, remote_origin∷𝕋) ←
+    let xx  ∷ MLCmdSpec ξ -> MLCmdSpec ξ;  xx = \ (mlcs) -> mlcs & cwd ⊢ 𝓙 dir
+    in  ꙩ (git, ["config", "--get", "remote.origin.url"∷𝕋],xx @𝕋)
+
+  remote_origin_re ← compRE "^git@[\\w.]+:${path}([-\\w/]+/)*${name}([-\\w]+)\\.git$"
+  let remote_origin_base ∷ 𝕋 = case remote_origin_re ≃ remote_origin of
+                                 𝓝 → remote_origin
+                                 𝓙 match → case GIDName "name" ! match of
+                                             𝓝 → remote_origin
+                                             𝓙 o → o
+
+  say $ [fmtT|remote_origin: %w (%w)|] remote_origin_base remote_origin
+
+  return remote_origin_base
+
 ------------------------------------------------------------
 
 (‼) ∷ (MonadIO μ, MonadReader δ μ, HasDoMock δ, ToMLCmdSpec (α, β) (),
@@ -1112,7 +1147,7 @@ myMain ∷ ∀ ε . (HasCallStack, AsIOError ε, AsFPathError ε, AsCreateProcEr
                 AsProcOutputParseError ε, AsProcExitError ε, AsREParseError ε,
                 AsParseError ε, Printable ε) ⇒
                Options → LoggingT (Log MockIOClass) (ExceptT ε IO) Word8
-myMain _ = flip runReaderT NoMock $ do
+myMain opts = flip runReaderT NoMock $ do
   let status_format =
         let formats = [ tmf lrBar
                       , tmf [ listAlignMark (AlignOpt StatusJustify) "<" ">"
@@ -1167,18 +1202,7 @@ __truncate_branch_name() {
 disk_usage:
 -}
 
-  (_, remote_origin∷𝕋) ←
-    let xx  ∷ MLCmdSpec ξ -> MLCmdSpec ξ;  xx = \ (mlcs) -> mlcs & cwd ⊢ 𝓙 [absdir|/home/martyn/src/hpkgs1/|]
-    in  ꙩ (git, ["config", "--get", "remote.origin.url"∷𝕋],xx @𝕋)
-
-  remote_origin_re ← compRE "^git@[\\w.]+:${path}([\\w/]+/)*${name}(\\w+)\\.git$"
-  let remote_origin_base = case remote_origin_re ≃ remote_origin of
-                             𝓝 → remote_origin
-                             𝓙 match → case GIDName "name" ! match of
-                                         𝓝 → remote_origin
-                                         𝓙 o → o
-
-  say $ [fmtT|remote_origin: %w (%w)|] remote_origin_base remote_origin
+  remote_origin_base ← remoteOriginBase (opts ⊣ dir)
 
   -- SessionName:WindowIndex.PaneIndex
   -- WE SHOULD SET THE STATUS TO USE #S, etc., RATHER THAN CALLING THIS
