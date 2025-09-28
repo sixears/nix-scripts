@@ -10,7 +10,8 @@
 
 import Base1
 
-import Prelude  ( Int, error )
+import Debug.Trace  ( traceShow )
+import Prelude  ( Int, error, round )
 
 -- base --------------------------------
 
@@ -19,8 +20,8 @@ import Control.Exception  ( Handler( Handler ), SomeException
 import Data.Bool          ( bool )
 import Data.Char          ( isAlphaNum, isAscii, isControl, isSpace )
 import Data.Function      ( flip )
-import Data.List          ( intercalate, repeat, reverse, sortOn, take, takeWhile
-                          , zip, zipWith )
+import Data.List          ( intercalate, repeat, reverse, sortOn, tails, take
+                          , takeWhile, zip, zipWith )
 import Data.Maybe         ( catMaybes )
 import System.IO.Error    ( ioeGetErrorString )
 import System.Timeout     ( timeout )
@@ -36,6 +37,10 @@ import Data.ByteString.Lazy  qualified as LBS
 -- domainnames -------------------------
 
 import DomainNames.Hostname  ( hostlocal )
+
+-- duration ----------------------------
+
+import Duration  ( Duration( SECS ), asMicroseconds )
 
 -- exceptions --------------------------
 
@@ -57,7 +62,7 @@ import Network.HTTP.Client.TLS      ( tlsManagerSettings )
 
 -- ip4 ---------------------------------
 
-import IP4  ( IP4 )
+import IP4  ( IP4, ip4 )
 
 -- lens --------------------------------
 
@@ -124,9 +129,13 @@ import Network.Info  ( getNetworkInterfaces )
 
 import Options.Applicative.Types    ( Parser )
 
+-- parsec-plus-base --------------------
+
+import Parsec.Error  ( throwAsParseError )
+
 -- parsec-plus -------------------------
 
-import ParsecPlus  ( ParseError, parser, parse )
+import ParsecPlus  ( AsParseError, Parsecable, ParseError, parsec, parser,parse )
 
 -- parsers -----------------------------
 
@@ -136,7 +145,8 @@ import Text.Parser.Combinators  ( eof )
 
 import PCRE          ( PCRE, compRE )
 import PCRE.Error    ( AsREParseError, PCREScriptError )
-import PCRE.REMatch  ( (~~) )
+import PCRE.GroupID  ( GroupID( GIDName,GIDNum ) )
+import PCRE.REMatch  ( (~~), (≃) )
 
 -- safe --------------------------------
 
@@ -506,7 +516,7 @@ listPayload ListNone            = 𝓝
 ------------------------------------------------------------
 
 -- tmux' colour nummbers, run tmux-colours to see them all
-newtype Colour8 = Colour8 Word8  deriving Show
+newtype Colour8 = Colour8 Word8  deriving  (Eq,Show)
 
 instance Printable Colour8 where print (Colour8 c) = P.text $ [fmt|%d|] c
 
@@ -1029,8 +1039,22 @@ catchUserE io = catch io (\ (e∷SomeException) → ѥ (throwUserError $ show e)
 isSimpleAscii ∷ ℂ → 𝔹
 isSimpleAscii c = isAscii c ∧ ﬧ  (isControl c)
 
+------------------------------------------------------------
+
+newtype LanIPs = LanIPs { unLanIPs ∷ [NI.IPv4] }
+  deriving Show
+
+lanIPs ∷ MonadIO μ ⇒ μ LanIPs
+lanIPs = liftIO $ LanIPs ⊳
+  (getNetworkInterfaces ⊲ \ nis → [ NI.ipv4 ni | ni ← nis
+           {- exclude lo                    -} , NI.name ni ≠ "lo"
+           {- exclude unassigned interfaces -} , NI.ipv4 ni ≠ NI.IPv4 0 ])
+
+----------------------------------------
+
+-- 𝓝 is returned in case of timeout
 httpReq ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ, HasCallStack) ⇒
-          𝕊 → Int → μ (𝕄 𝕋)
+          𝕊 → Duration → μ (𝕄 𝕋)
 httpReq url timeoutμs =
   let catcher io =
         let some_ex_h (e∷SomeException) =
@@ -1046,11 +1070,37 @@ httpReq url timeoutμs =
   in  join ∘ liftIO ∘ catcher ∘ ѥ ∘ asIOError $ do
         manager ← newManager tlsManagerSettings
         request ← parseRequest url
-        timeout timeoutμs $ do
+--        timeout (fromIntegral timeoutμs) $ do
+        timeout (round $ timeoutμs ⊣ asMicroseconds) $ do
           response ← httpLbs request manager
           return ∘ decodeUtf8 ∘ LBS.toStrict $ responseBody response
 
+--------------------
+
+httpRequest ∷ ∀ ε α μ .
+              (MonadIO μ, AsParseError ε, AsIOError ε, MonadError ε μ,
+               Parsecable α) ⇒
+              𝕊 → Duration → μ (𝕄 α)
+httpRequest url timeoutμs = do
+  html ← httpReq url timeoutμs
+  case html of
+    𝓝 → return 𝓝
+    𝓙 t → case parsec t t of
+            𝓛 e → join $ throwError e
+            𝓡 r → return $ 𝓙 r
+
 ----------------------------------------
+
+wanIP ∷ MonadIO μ ⇒ μ 𝕋
+wanIP =
+  let url     = "http://whatismyip.akamai.com"
+      timeout = SECS 2
+  in  ѥ (httpRequest @ScriptError @IP4 url timeout) ⊲ \ case
+        𝓛 e     → T.take 15 $ toText e
+        𝓡 (𝓙 r) → toText r
+        𝓡 𝓝     → "NONE"
+
+------------------------------------------------------------
 
 (‼) ∷ (MonadIO μ, MonadReader δ μ, HasDoMock δ, ToMLCmdSpec (α, β) (),
        AsIOError ε, AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
@@ -1058,10 +1108,10 @@ httpReq url timeoutμs =
       α → β → μ ()
 cmd ‼ args = ꙩ (cmd,args) ≫ return ∘ snd
 
-myMain ∷ ∀ ε .
-         (HasCallStack, AsIOError ε, AsFPathError ε, AsCreateProcError ε,
-          AsProcOutputParseError ε, AsProcExitError ε, Printable ε) ⇒
-         Options → LoggingT (Log MockIOClass) (ExceptT ε IO) Word8
+myMain ∷ ∀ ε . (HasCallStack, AsIOError ε, AsFPathError ε, AsCreateProcError ε,
+                AsProcOutputParseError ε, AsProcExitError ε, AsREParseError ε,
+                AsParseError ε, Printable ε) ⇒
+               Options → LoggingT (Log MockIOClass) (ExceptT ε IO) Word8
 myMain _ = flip runReaderT NoMock $ do
   let status_format =
         let formats = [ tmf lrBar
@@ -1077,7 +1127,8 @@ myMain _ = flip runReaderT NoMock $ do
             ]
 
       -- these are tmux' colour numbers, run tmux-colours to see them all
-      colours_left = [ (Colour8 234    {- black -}, Colour8 148 {- yellow -})
+      colours_left = [ -- (fg_colour, bg_colour)
+                       (Colour8 234    {- black -}, Colour8 148 {- yellow -})
                      , (Colour8 255    {- white -}, Colour8  90 {- magenta -})
                      , (Colour8 255    {- white -}, Colour8  24 {- dusky blue -})
                      , (Colour8 255    {- white -}, Colour8  24 {- dusky blue -})
@@ -1088,28 +1139,16 @@ myMain _ = flip runReaderT NoMock $ do
   forM_ (toTextss status_format) (tmux ‼)
 
   host ← hostname Informational
---  re ← compRE "^(?:\\d+)\\.(?:\\d+)\\.(?:\\d+)\\.(?:\\d+)$"
--- XXX don't even try if there is no route?
-  wan_ip ∷ 𝕋 ← ѥ ( {- ѥ @IOError ((either (\ e → "ERR: " ◇ T.take 12 (toText e)) toText ∘ parse @ParseError (parser @IP4 ⋪ eof) "whatismyip.akamai.com") ⊳⊳ -} httpReq "http://whatismyip.akamai.com" 2_000_000 ) ≫  \ case 𝓛 (e∷IOError) → return (maybe "-ERR-" (T.pack ∘ takeWhile (\ c → isSimpleAscii c ∧ ﬧ (isSpace c)) ∘ ioeGetErrorString) $ e ⩼ _IOErr); 𝓡 ip → return (ip ⧏ "UNKNOWN")
 
-  lan_ips ← liftIO $ getNetworkInterfaces ⊲ \ nis → [NI.ipv4 ni | ni ← nis, NI.name ni ≠ "lo"]
-
-{-
-  wan_ip ← do wan_ip ← httpReq "http://whatismyip.akamai.com" 2_000_000
-              return $ case re ≈ wan_ip of
-                 𝓣 → 𝓙 wan_ip
-                 𝓕 → 𝓝
--}
-
-  (_, remote_origin∷𝕋) ←
-    let xx  ∷ MLCmdSpec ξ -> MLCmdSpec ξ;  xx = \ (mlcs) -> mlcs & cwd ⊢ 𝓙 [absdir|/home/martyn/src/hpkgs1/|]
-    in  ꙩ (git, ["config", "--get", "remote.origin.url"∷𝕋],xx {- @() -} @𝕋)
+  liftIO getNetworkInterfaces ≫ say ∘ [fmtT|getNetworkInterfaces: %w|]
+  lan_ips ← lanIPs
+  say $ [fmtT|lan_ips: %w|] lan_ips
+  wan_ip ← case lan_ips of
+             LanIPs [] → return ""
+             _         → wanIP
+  say $ [fmtT|wan_ip: %w|] wan_ip
 
 {- VCS:
-[martyn:mockio-cmds-inetutils:0]$ basename -s .git `git config --get remote.origin.url`
-mockio-cmds-inetutils
-[martyn:mockio-cmds-inetutils:0]$ git config --get remote.origin.url
-git@github.com:sixears/mockio-cmds-inetutils.git
 [martyn:mockio-cmds-inetutils:0]$ git symbolic-ref HEAD
 refs/heads/master
 [martyn:mockio-cmds-inetutils:0]$ git rev-parse --short HEAD
@@ -1128,26 +1167,57 @@ __truncate_branch_name() {
 disk_usage:
 -}
 
+  (_, remote_origin∷𝕋) ←
+    let xx  ∷ MLCmdSpec ξ -> MLCmdSpec ξ;  xx = \ (mlcs) -> mlcs & cwd ⊢ 𝓙 [absdir|/home/martyn/src/hpkgs1/|]
+    in  ꙩ (git, ["config", "--get", "remote.origin.url"∷𝕋],xx @𝕋)
+
+  remote_origin_re ← compRE "^git@[\\w.]+:${path}([\\w/]+/)*${name}(\\w+)\\.git$"
+  let remote_origin_base = case remote_origin_re ≃ remote_origin of
+                             𝓝 → remote_origin
+                             𝓙 match → case GIDName "name" ! match of
+                                         𝓝 → remote_origin
+                                         𝓙 o → o
+
+  say $ [fmtT|remote_origin: %w (%w)|] remote_origin_base remote_origin
+
   -- SessionName:WindowIndex.PaneIndex
   -- WE SHOULD SET THE STATUS TO USE #S, etc., RATHER THAN CALLING THIS
   (_,[sess_win_pane∷𝕋]) ← ꙩ (tmux,["display-message"∷𝕋, "-p", "#S:#I.#P"])
-  let col_fmt t fg_ bg_ =
+  let colour_fmt t fg_ bg_ =
         [fmtT|%T%T|] (tmf $ ꝏ & fg ⊩ fg_ & bg ⊩ bg_ & styleDef) t
       vals_left = let spaces t = " " ◇ t ◇ " "
-                  in  zipWith (\ t (fg_,bg_) → col_fmt t fg_ bg_)
+                  in  zipWith (\ t (fg_,bg_) → colour_fmt t fg_ bg_)
                               (spaces ⊳ [ sess_win_pane
                                         , toText $ hostlocal host
--- XXX insert thin rather than thick marker here
-                                        , "ⓛ " ◇ (case lan_ips of [] → "NONE"; _ → T.intercalate "," (T.pack ∘ show ⊳ lan_ips))
+                                        , "ⓛ " ◇ (case unLanIPs lan_ips of [] → "NONE"; ips → T.intercalate "," (T.pack ∘ show ⊳ ips))
 -- XXX don't even try if there is no route?
 -- XXX just drop this if there is no wan_ip
                                         , "ⓦ " ◇ (wan_ip {- ⧏ "UNKNOWN" -})
-                                        , remote_origin
+                                        , remote_origin_base
                                         ])
                               colours_left
-      seps_left = zipWith (col_fmt $ separator (𝓛()) Bold)
-                          ((⊣ _2) ⊳ colours_left)
-                          (((⊣ _2) ⊳ tailSafe colours_left) ◇ [Colour8 0])
+      left_sep ∷ ∀ ω . [(Colour8,Colour8)] → 𝕋
+      left_sep ((fg0,bg0):(fg1,bg1):_) | bg0 ≡ bg1 =
+        -- use fg col with thin sep if two adjacent bgs are the same
+        colour_fmt (separator (𝓛()) Thin) fg0 bg0
+                                       | otherwise =
+        colour_fmt (separator (𝓛()) Bold) bg0 bg1
+
+      seps_left ∷ [𝕋]
+      seps_left = left_sep ⊳ tails (colours_left ◇ [(Colour8 255, Colour8 0)])
+
+      seps_left' ∷ [𝕋]
+      seps_left' =
+        let colour_txt ∷ Colour8 → Colour8 → 𝕋
+            colour_txt = colour_fmt $ separator (𝓛()) Bold
+            -- the fg is the bg of the prior thing
+            fg_colours =  ((⊣ _2) ⊳ colours_left)
+            -- the bg is the fg of the next thing (with black at the end)
+            bg_colours = (((⊣ _2) ⊳ tailSafe colours_left) ◇ [Colour8 0])
+        in  -- we use the bg colours as the fg for the separator (that is,
+            -- the separator is in effect a colour inversion)
+            zipWith colour_txt fg_colours bg_colours
+
   let left_status = ю ∘ ю $
           zipWith (\ a b → [a,b]) vals_left seps_left
         ◇ [[toText ∘ tmf $ ꝏ & styleDef ]]
@@ -1173,7 +1243,7 @@ separator = separator' PatchedFontInUse
 main ∷ IO ()
 main = do
   let progDesc ∷ 𝕋 = "tmux config & helper"
-      my_main = myMain @UsageParseFPProcIOOPError -- @PCREScriptError
+      my_main = myMain @PCREScriptError
   getArgs ≫ (\ args → stdMainNoDR progDesc parseOptions my_main args)
 
 
