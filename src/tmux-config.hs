@@ -25,6 +25,7 @@ import Data.List          ( intercalate, repeat, reverse, sortOn, tails, take
 import Data.Maybe         ( catMaybes )
 import System.IO.Error    ( ioeGetErrorString )
 import System.Timeout     ( timeout )
+import Text.Read          ( readEither )
 
 -- base-unicode-symbols ----------------
 
@@ -33,6 +34,10 @@ import Prelude.Unicode  ( (×), (≠) )
 -- bytestring --------------------------
 
 import Data.ByteString.Lazy  qualified as LBS
+
+-- containers --------------------------
+
+import Data.Set  qualified as  Set
 
 -- domainnames -------------------------
 
@@ -48,10 +53,13 @@ import Control.Monad.Catch  ( MonadMask )
 
 -- fpath -------------------------------
 
+import FPath.Parseable  qualified
+
 import FPath.AbsDir            ( AbsDir, absdir )
 import FPath.AbsFile           ( AbsFile, absfile )
 import FPath.Error.FPathError  ( AsFPathError, FPathError )
 import FPath.Parseable         ( Parseable, parseDir, readM )
+import FPath.RelFile           ( RelFile )
 
 -- http-client -------------------------
 
@@ -103,8 +111,9 @@ import MonadIO                        ( say )
 import MonadIO.Base                   ( getArgs )
 import MonadIO.Error.CreateProcError  ( AsCreateProcError )
 import MonadIO.Error.ProcExitError    ( AsProcExitError )
-import MonadIO.Process.CmdSpec        ( cwd )
+import MonadIO.Process.CmdSpec        ( cwd, expExitVal )
 import MonadIO.Process.ExitInfo       ( ExitInfo )
+import MonadIO.Process.ExitStatus     ( ExitStatus( ExitVal, ExitSig ), exitVal )
 
 -- more-unicode ------------------------
 
@@ -158,7 +167,8 @@ import Safe  ( tailSafe )
 
 import StdMain                       ( stdMainNoDR )
 import StdMain.ProcOutputParseError  ( AsProcOutputParseError, ScriptError
-                                     , UsageParseFPProcIOOPError)
+                                     , UsageParseFPProcIOOPError
+                                     , throwAsProcOutputParseError )
 
 -- tasty -------------------------------
 
@@ -201,11 +211,18 @@ runCmd ∷ ∀ ε α μ . (MonadIO μ, MonadMask μ) =>
        → μ (𝔼 ε (ExitInfo,α))
 runCmd = flip runReaderT NoMock ∘ logit -- @ScriptError
 
-tmux ∷ AbsFile
-tmux = [absfile|/home/martyn/.nix-profiles/default/bin/tmux|]
+tmux_path ∷ AbsFile
+tmux_path = [absfile|/home/martyn/.nix-profiles/default/bin/tmux|]
 
-git ∷ AbsFile
-git = [absfile|/run/current-system/sw/bin/git|]
+git_path ∷ AbsFile
+git_path = [absfile|/run/current-system/sw/bin/git|]
+
+git ∷ ∀ ε δ μ . (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+                 AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
+                 AsIOError ε, Printable ε, MonadError ε μ,
+                 MonadLog (Log MockIOClass) μ) ⇒
+      AbsDir → [𝕋] → μ [𝕋]
+git d args = snd ⊳ ꙩ (git_path,args,mlCmdSpecSetCWD @[𝕋] d)
 
 ------------------------------------------------------------
 
@@ -1113,27 +1130,204 @@ wanIP =
 
 ----------------------------------------
 
-remoteOriginBase ∷ ∀ ε δ μ .
-                   (MonadIO μ, HasDoMock δ, MonadReader δ μ,
-                    AsProcExitError ε, AsREParseError ε, AsCreateProcError ε,
-                    AsFPathError ε, AsIOError ε, Printable ε, MonadError ε μ,
-                    MonadLog (Log MockIOClass) μ) ⇒
-                   AbsDir → μ 𝕋
-remoteOriginBase dir = do
-  (_, remote_origin∷𝕋) ←
-    let xx  ∷ MLCmdSpec ξ -> MLCmdSpec ξ;  xx = \ (mlcs) -> mlcs & cwd ⊢ 𝓙 dir
-    in  ꙩ (git, ["config", "--get", "remote.origin.url"∷𝕋],xx @𝕋)
+-- add this to MLCmdSpec or similar
+mlCmdSpecSetCWD ∷ AbsDir → MLCmdSpec ξ → MLCmdSpec ξ
+mlCmdSpecSetCWD d mlcs = mlcs & cwd ⊢ 𝓙 d
 
-  remote_origin_re ← compRE "^git@[\\w.]+:${path}([-\\w/]+/)*${name}([-\\w]+)\\.git$"
-  let remote_origin_base ∷ 𝕋 = case remote_origin_re ≃ remote_origin of
-                                 𝓝 → remote_origin
-                                 𝓙 match → case GIDName "name" ! match of
-                                             𝓝 → remote_origin
-                                             𝓙 o → o
+mlCmdSpecSetExpExitVal ∷ Set.Set Word8 → MLCmdSpec ξ → MLCmdSpec ξ
+mlCmdSpecSetExpExitVal exp mlcs = mlcs & expExitVal ⊢ exp
+
+mlCExpBool ∷ MLCmdSpec ξ → MLCmdSpec ξ
+mlCExpBool = mlCmdSpecSetExpExitVal (fromList [0,1])
+
+-- add this to PCRE?
+{-| Match an RE, pick out a named/numbered group -}
+pickGroup ∷ PCRE → GroupID → 𝕋 → 𝕄 𝕋
+pickGroup re group t = re ≃ t ≫ \ match → group ! match
+
+--------------------
+
+{-| If a PCRE matches, and the given group is found: use that, else return the whole text -}
+pickGroupIfMatches ∷ PCRE → GroupID → 𝕋 → 𝕋
+pickGroupIfMatches re group t =  pickGroup re group t ⧏ t
+
+----------------------------------------
+
+gitRemoteOriginBase ∷ ∀ ε δ μ .
+                      (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+                       AsProcExitError ε, AsCreateProcError ε, AsFPathError ε,
+                       AsIOError ε, AsREParseError ε,
+                       Printable ε, MonadError ε μ,
+                       MonadLog (Log MockIOClass) μ) ⇒
+                      AbsDir → μ 𝕋
+gitRemoteOriginBase d = do
+  let setCWD = mlCmdSpecSetCWD @𝕋 d
+  remote_origin ← snd ⊳ ꙩ (git_path,["config","--get","remote.origin.url"∷𝕋],setCWD)
+
+  basename_re ← compRE "^git@[\\w.]+:([-\\w/]+/)*${name}([-\\w]+)\\.git$"
+  let remote_origin_base =
+        pickGroupIfMatches basename_re (GIDName "name") remote_origin
 
   say $ [fmtT|remote_origin: %w (%w)|] remote_origin_base remote_origin
 
   return remote_origin_base
+
+----------------------------------------
+
+chomp ∷ 𝕋 → 𝕋
+chomp = T.dropWhileEnd (∈ ['\r','\n'])
+
+gitSymbolicRefHeadBase ∷ ∀ ε δ μ .
+                      (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+                       AsProcExitError ε, AsCreateProcError ε, AsFPathError ε,
+                       AsIOError ε, Printable ε, MonadError ε μ,
+                       MonadLog (Log MockIOClass) μ) ⇒
+                      AbsDir → μ 𝕋
+gitSymbolicRefHeadBase d = do
+  let setCWD = mlCmdSpecSetCWD @𝕋 d
+  head_ref ← snd ⊳ ꙩ (git_path,["symbolic-ref","HEAD"∷𝕋],setCWD)
+
+  let head_ref_base = chomp $ T.takeWhileEnd (≠ '/') head_ref
+  say $ [fmtT|head_ref: %w (%w)|] head_ref_base head_ref
+
+  return head_ref_base
+
+----------------------------------------
+
+{-| Get the latest tag, the number of changes since then and the short name of
+    the most recent commit -}
+gitTagState ∷ ∀ ε δ μ .
+              (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+               AsProcExitError ε,AsCreateProcError ε,AsFPathError ε,AsIOError ε,
+               Printable ε, MonadError ε μ,
+               MonadLog (Log MockIOClass) μ) ⇒
+              AbsDir → μ (𝕋,𝕋,𝕋)
+gitTagState d = do
+  let setCWD = mlCmdSpecSetCWD @𝕋 d
+  tag_state ← snd ⊳ ꙩ (git_path,["describe","--tags","--long"∷𝕋],setCWD)
+
+  let (tagname,tagchanges,tagref) =
+        case reverse $ T.split (≡'-') tag_state of
+          (ref : changes : name_r) →
+            (T.intercalate "-" (reverse name_r), changes, ref)
+          _ → (tag_state,"","")
+
+  say $ [fmtT|tag state: %t//%t//%t|] tagname tagchanges tagref
+  return (tagname,tagchanges,tagref)
+
+----------------------------------------
+
+data FileChangeStats = FileChangeStats { _changedFile  ∷ RelFile
+                                       , _linesAdded   ∷ ℕ
+                                       , _linesRemoved ∷ ℕ
+                                       }
+
+data StagedChangesFileStats  = StagedChangesFiles  FileChangeStats
+data WorkingChangesFileStats = WorkingChangesFiles FileChangeStats
+
+data GitChangedFilesStats =
+  GitChangedFilesStats { _workingChangesFilesStats ∷ [WorkingChangesFileStats]
+                       , _stagedChangesFilesStats  ∷ [StagedChangesFileStats]
+                       }
+
+workingChangesFileStats ∷ Lens' GitChangedFilesStats [WorkingChangesFileStats]
+workingChangesFileStats =
+  lens _workingChangesFilesStats (\ cfs w → cfs { _workingChangesFilesStats = w})
+
+workingChangesFileCount ∷ GitChangedFilesStats → ℕ
+workingChangesFileCount = ỻ ∘ (⊣ workingChangesFileStats)
+
+stagedChangesFileStats ∷ Lens' GitChangedFilesStats [StagedChangesFileStats]
+stagedChangesFileStats =
+  lens _stagedChangesFilesStats (\ cfs s → cfs { _stagedChangesFilesStats = s })
+
+stagedChangesFileCount ∷ GitChangedFilesStats → ℕ
+stagedChangesFileCount = ỻ ∘ (⊣ stagedChangesFileStats)
+
+{-| Get the latest tag, the number of changes since then and the short name of
+    the most recent commit -}
+gitChangedFilesStats ∷ ∀ ε δ μ .
+              (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+               AsProcExitError ε, AsCreateProcError ε, AsFPathError ε,
+               AsIOError ε, AsProcOutputParseError ε, Printable ε,MonadError ε μ,
+               MonadLog (Log MockIOClass) μ) ⇒
+              AbsDir → μ GitChangedFilesStats
+gitChangedFilesStats d = do
+  let set_context ∷ MLCmdSpec () → MLCmdSpec ()
+      set_context = mlCmdSpecSetCWD d ∘ mlCExpBool
+
+  -- the "index" is files we have staged for commit; but not yet committed
+
+  -- use `git diff-index --quiet HEAD --` to check for diffs between working
+  --                                      directory and HEAD (by exit code)
+
+  -- use `git diff-index --quiet HEAD --cached --` to check for diffs between
+  --                                               the index and HEAD (by exit)
+
+  -- use `git diff-files --quiet` to check for diffs between the working
+  --                              directory and the index
+
+--  staged_changes_files_count ← StagedChangesFileCount ∘ ỻ ⊳ git d ["diff", "--cached", "--numstat"∷𝕋]
+
+--  working_changes_files_count ← WorkingChangesFileCount ∘ ỻ ⊳ git d ["diff", "--numstat"∷𝕋]
+
+{-
+[martyn:src:0]$ git diff --numstat
+138     102     flake.lock
+7       2       flake.nix
+32      19      src/battery.nix
+4       4       src/dezip.nix
+14      6       src/homelinks.nix
+17      17      src/init-home.nix
+221     49      src/st-cnflcts-dff.nix
+207     52      src/tmux-config.hs
+-}
+
+  working_file_diffs ← git d ["diff", "--numstat"∷𝕋]
+  let parse_numstat_line ∷ (AsProcOutputParseError ε, MonadError ε η) ⇒
+                           𝕋 → η FileChangeStats
+      parse_numstat_line t = case T.splitOn "\t" t of
+                               [added_,removed_,fn_] → do
+                                 let readE name typ t = case readEither (T.unpack t) of
+                                       𝓛 e → throwAsProcOutputParseError $ [fmtT|failed to read %t '%t' as %t: %s|] name t typ e
+                                       𝓡 r → return r
+                                 added   ← readE "lines added"   "ℕ" added_
+                                 removed ← readE "lines removed" "ℕ" removed_
+                                 fn      ← FPath.Parseable.parse fn_
+                                 return $ FileChangeStats fn added removed
+
+                               _ → throwAsProcOutputParseError $ [fmtT|failed to parse output line to git diff --numstat: %t|] t
+
+  working_changes_file_stats ← WorkingChangesFiles ⊳⊳ (mapM parse_numstat_line working_file_diffs)
+
+  staged_file_diffs ← git d ["diff", "--cached", "--numstat"∷𝕋]
+--  let staged_changes_file_stats = _ ⊳ staged_file_diffs
+  staged_changes_file_stats ← StagedChangesFiles ⊳⊳ (mapM parse_numstat_line staged_file_diffs)
+
+  -- `git rev-list --left-right --count HEAD...origin/master will show something
+  -- like `35\t0` meaning that HEAD is 35 commits ahead of (remote) origin/master
+  -- and 0 commits behind
+--  return (working_changes_files_count, staged_changes_files_count)
+  return $
+    GitChangedFilesStats { _workingChangesFilesStats = working_changes_file_stats
+                         , _stagedChangesFilesStats  = staged_changes_file_stats
+                         }
+
+gitChangedFilesStatsTmuxSummary ∷ GitChangedFilesStats → 𝕋
+gitChangedFilesStatsTmuxSummary gcfs =
+  case (workingChangesFileCount gcfs, stagedChangesFileCount gcfs) of
+    (  0,  0) → ""
+    (wfc,  0) → [fmt|%d★|]      wfc -- ⭐ -- ᕯ
+    (  0,sfc) → [fmt|⁑[%d]|]    sfc -- 🔯
+    (wfc,sfc) → [fmt|%d⁂[%d]|] wfc sfc -- 🌠
+
+{-
+            𝓛 e → return $ T.take 8 $ toText e
+            𝓡 (WorkingChangesFileCount 0,StagedChangesFileCount 0) → return ""
+            𝓡 (WorkingChangesFileCount wfc, StagedChangesFileCount 0) → return $ [fmt|%d⭐|] wfc -- return "⭐" -- ᕯ
+            𝓡 (WorkingChangesFileCount 0, StagedChangesFileCount sfc) → return $ [fmt|🔯[%d]|] sfc -- ⁑
+            𝓡 (WorkingChangesFileCount wfc,StagedChangesFileCount sfc) → return $ [fmt|%d🌠[%d]|] wfc sfc -- ⁂
+-}
 
 ------------------------------------------------------------
 
@@ -1168,14 +1362,17 @@ myMain opts = flip runReaderT NoMock $ do
                      , (Colour8 255    {- white -}, Colour8  24 {- dusky blue -})
                      , (Colour8 255    {- white -}, Colour8  24 {- dusky blue -})
                      , (Colour8  88 {- deep red -}, Colour8  29 {- grey blue -})
+                     , (Colour8  88 {- deep red -}, Colour8  29 {- grey blue -})
+                     , (Colour8  88 {- deep red -}, Colour8  29 {- grey blue -})
                      ]
 
   -- emit a tmux command for each (set-option) in status_format
-  forM_ (toTextss status_format) (tmux ‼)
+  forM_ (toTextss status_format) (tmux_path ‼)
 
   host ← hostname Informational
 
   liftIO getNetworkInterfaces ≫ say ∘ [fmtT|getNetworkInterfaces: %w|]
+  -- `ip monitor -tshort address` to see addresses come & go
   lan_ips ← lanIPs
   say $ [fmtT|lan_ips: %w|] lan_ips
   wan_ip ← case lan_ips of
@@ -1183,42 +1380,53 @@ myMain opts = flip runReaderT NoMock $ do
              _         → wanIP
   say $ [fmtT|wan_ip: %w|] wan_ip
 
-{- VCS:
-[martyn:mockio-cmds-inetutils:0]$ git symbolic-ref HEAD
-refs/heads/master
-[martyn:mockio-cmds-inetutils:0]$ git rev-parse --short HEAD
-6c99717
-
-	branch=${branch#refs\/heads\/}
-	branch=$(__truncate_branch_name $branch)
-
-__truncate_branch_name() {
-	trunc_symbol="…"
-	branch=$(echo $1 | sed "s/\(.\{$TMUX_POWERLINE_SEG_VCS_BRANCH_MAX_LEN\}\).*/\1$trunc_symbol/")
-	echo -n $branch
-}
--}
+  -- encapsulate into a function
+        -- check git rev-parse --is-inside-work-tree
+  remote_origin_base ← gitRemoteOriginBase (opts ⊣ dir)
+  head_ref_base ← gitSymbolicRefHeadBase (opts ⊣ dir)
+  (tagname,tagchanges,_) ← ѥ @ScriptError (gitTagState (opts ⊣ dir)) ≫ \ case
+                             𝓛 _  → return ("","","")
+                             𝓡 xs → return xs
+--  (staged_changes,working_changes) ← gitChangedFilesStats (opts ⊣ dir)
 {-
-disk_usage:
+  stw ← ѥ @ScriptError (gitChangedFilesStats (opts ⊣ dir)) ≫ \ case
+            𝓛 e → return $ T.take 8 $ toText e
+            𝓡 (WorkingChangesFileCount 0,StagedChangesFileCount 0) → return ""
+            𝓡 (WorkingChangesFileCount wfc, StagedChangesFileCount 0) → return $ [fmt|%d⭐|] wfc -- return "⭐" -- ᕯ
+            𝓡 (WorkingChangesFileCount 0, StagedChangesFileCount sfc) → return $ [fmt|🔯[%d]|] sfc -- ⁑
+            𝓡 (WorkingChangesFileCount wfc,StagedChangesFileCount sfc) → return $ [fmt|%d🌠[%d]|] wfc sfc -- ⁂
 -}
-
-  remote_origin_base ← remoteOriginBase (opts ⊣ dir)
+  stw ← ѥ @ScriptError (gitChangedFilesStats (opts ⊣ dir)) ≫ \ case
+            𝓛 e → return $ T.take 8 $ toText e
+            𝓡 cfs → return $ gitChangedFilesStatsTmuxSummary cfs
 
   -- SessionName:WindowIndex.PaneIndex
   -- WE SHOULD SET THE STATUS TO USE #S, etc., RATHER THAN CALLING THIS
-  (_,[sess_win_pane∷𝕋]) ← ꙩ (tmux,["display-message"∷𝕋, "-p", "#S:#I.#P"])
+  (_,[sess_win_pane∷𝕋]) ← ꙩ (tmux_path,["display-message"∷𝕋, "-p", "#S:#I.#P"])
+
+  let articles ∷ [𝕋]
+      articles = [ sess_win_pane
+                 , toText $ hostlocal host
+                 , "ⓛ " ◇ (case unLanIPs lan_ips of [] → "NONE"; ips → T.intercalate "," (T.pack ∘ show ⊳ ips))
+-- XXX don't even try if there is no route?
+-- XXX just drop this if there is no wan_ip
+                 , "ⓦ " ◇ (wan_ip {- ⧏ "UNKNOWN" -})
+                 , remote_origin_base
+                 , head_ref_base
+                 , ю [ if tagchanges≡"0"
+                       then "✓" ◇ tagname
+                       else tagname ◇ "+" ◇ tagchanges
+                     , case stw of "" → ""; _ → " «" ◇ stw ◇ "»"
+                     ]
+                 ]
+
+  forM_ (zip articles [0..]) ( \ (a,n) → say $ [fmtT|%02d: %t|] n a)
+
   let colour_fmt t fg_ bg_ =
         [fmtT|%T%T|] (tmf $ ꝏ & fg ⊩ fg_ & bg ⊩ bg_ & styleDef) t
       vals_left = let spaces t = " " ◇ t ◇ " "
                   in  zipWith (\ t (fg_,bg_) → colour_fmt t fg_ bg_)
-                              (spaces ⊳ [ sess_win_pane
-                                        , toText $ hostlocal host
-                                        , "ⓛ " ◇ (case unLanIPs lan_ips of [] → "NONE"; ips → T.intercalate "," (T.pack ∘ show ⊳ ips))
--- XXX don't even try if there is no route?
--- XXX just drop this if there is no wan_ip
-                                        , "ⓦ " ◇ (wan_ip {- ⧏ "UNKNOWN" -})
-                                        , remote_origin_base
-                                        ])
+                              (spaces ⊳ articles)
                               colours_left
       left_sep ∷ ∀ ω . [(Colour8,Colour8)] → 𝕋
       left_sep ((fg0,bg0):(fg1,bg1):_) | bg0 ≡ bg1 =
@@ -1245,7 +1453,7 @@ disk_usage:
   let left_status = ю ∘ ю $
           zipWith (\ a b → [a,b]) vals_left seps_left
         ◇ [[toText ∘ tmf $ ꝏ & styleDef ]]
-  tmux ‼ ["display-message", left_status]
+  tmux_path ‼ ["display-message", left_status]
   return 0
 
 data BoldThin = Bold | Thin
