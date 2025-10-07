@@ -207,8 +207,7 @@ t ~~~ r = bool 𝓝 (𝓙 t) (t ~~ r)
     e.g., `runCmd @ScriptError $ hostname Informational`
 -}
 runCmd ∷ ∀ ε α μ . (MonadIO μ, MonadMask μ) =>
-         ExceptT ε (LoggingT (Log MockIOClass) (ReaderT DoMock μ)) (ExitInfo,α)
-       → μ (𝔼 ε (ExitInfo,α))
+         ExceptT ε (LoggingT (Log MockIOClass) (ReaderT DoMock μ)) α → μ (𝔼 ε α)
 runCmd = flip runReaderT NoMock ∘ logit -- @ScriptError
 
 tmux_path ∷ AbsFile
@@ -221,8 +220,15 @@ git ∷ ∀ ε δ μ . (MonadIO μ, HasDoMock δ, MonadReader δ μ,
                  AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
                  AsIOError ε, Printable ε, MonadError ε μ,
                  MonadLog (Log MockIOClass) μ) ⇒
+      AbsDir → [𝕋] → μ 𝕋
+git d args = snd ⊳ ꙩ (git_path,args,mlCmdSpecSetCWD @𝕋 d)
+
+gits ∷ ∀ ε δ μ . (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+                 AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
+                 AsIOError ε, Printable ε, MonadError ε μ,
+                 MonadLog (Log MockIOClass) μ) ⇒
       AbsDir → [𝕋] → μ [𝕋]
-git d args = snd ⊳ ꙩ (git_path,args,mlCmdSpecSetCWD @[𝕋] d)
+gits d args = snd ⊳ ꙩ (git_path,args,mlCmdSpecSetCWD @[𝕋] d)
 
 ------------------------------------------------------------
 
@@ -1162,7 +1168,7 @@ gitRemoteOriginBase ∷ ∀ ε δ μ .
                       AbsDir → μ 𝕋
 gitRemoteOriginBase d = do
   let setCWD = mlCmdSpecSetCWD @𝕋 d
-  remote_origin ← snd ⊳ ꙩ (git_path,["config","--get","remote.origin.url"∷𝕋],setCWD)
+  remote_origin ← git d ["config", "--get", "remote.origin.url"]
 
   basename_re ← compRE "^git@[\\w.]+:([-\\w/]+/)*${name}([-\\w]+)\\.git$"
   let remote_origin_base =
@@ -1194,6 +1200,61 @@ gitSymbolicRefHeadBase d = do
 
 ----------------------------------------
 
+data GitCommitDiffCount = GitCommitDiffCount { _git_dir        ∷ AbsDir
+                                             , _commits_from   ∷ 𝕋
+                                             , _commits_to     ∷ 𝕋
+                                             {-| number of commits that `to` has
+                                                 that `from` does not -}
+                                             , _commits_ahead  ∷ ℕ
+                                             {-| number of commits that `from`
+                                                 has that `to` does not -}
+                                             , _commits_behind ∷ ℕ
+                                             }
+  deriving Show
+
+--------------------
+
+commits_ahead ∷ Lens' GitCommitDiffCount ℕ
+commits_ahead = lens _commits_ahead (\ gcdf a → (gcdf { _commits_ahead = a }))
+
+--------------------
+
+commits_behind ∷ Lens' GitCommitDiffCount ℕ
+commits_behind = lens _commits_behind (\ gcdf b → (gcdf { _commits_behind = b }))
+
+----------------------------------------
+
+-- `git rev-list --left-right --count HEAD...origin/master will show something
+-- like `35\t0` meaning that HEAD is 35 commits ahead of (remote) origin/master
+-- and 0 commits behind
+{-| How far ahead/behind is the local commit state compared to remote? -}
+gitCommitDiffCount ∷ ∀ ε δ μ .
+                      (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+                       AsProcExitError ε, AsCreateProcError ε, AsFPathError ε,
+                       AsIOError ε, AsProcOutputParseError ε,
+                       Printable ε, MonadError ε μ,
+                       MonadLog (Log MockIOClass) μ) ⇒
+                      AbsDir → 𝕋 → 𝕋 → μ GitCommitDiffCount
+gitCommitDiffCount d from {-^ e.g., "origin/master -} to {-^ e.g., "HEAD" -} = do
+  let git_args = ["rev-list", "--left-right", "--count", to ◇ "..." ◇ from ]
+  head_ref ← chomp ⊳ git d git_args
+
+  case T.splitOn "\t" head_ref of
+    [ahead_,behind_] → do
+      ahead  ← readℕ "commits ahead" ahead_
+      behind ← readℕ "commits behind" behind_
+      return $ GitCommitDiffCount d from to ahead behind
+
+newtype TMuxStatusGitCommitDiffCount =
+  TMuxStatusGitCommitDiffCount GitCommitDiffCount
+  deriving Show
+
+instance Printable TMuxStatusGitCommitDiffCount where
+  print (TMuxStatusGitCommitDiffCount gcdf) = P.text $
+    [fmt|↑%d↓%d|] (gcdf ⊣ commits_ahead) (gcdf ⊣ commits_behind)
+
+----------------------------------------
+
 {-| Get the latest tag, the number of changes since then and the short name of
     the most recent commit -}
 gitTagState ∷ ∀ ε δ μ .
@@ -1204,7 +1265,7 @@ gitTagState ∷ ∀ ε δ μ .
               AbsDir → μ (𝕋,𝕋,𝕋)
 gitTagState d = do
   let setCWD = mlCmdSpecSetCWD @𝕋 d
-  tag_state ← snd ⊳ ꙩ (git_path,["describe","--tags","--long"∷𝕋],setCWD)
+  tag_state ← git d ["describe", "--tags", "--long"]
 
   let (tagname,tagchanges,tagref) =
         case reverse $ T.split (≡'-') tag_state of
@@ -1215,34 +1276,73 @@ gitTagState d = do
   say $ [fmtT|tag state: %t//%t//%t|] tagname tagchanges tagref
   return (tagname,tagchanges,tagref)
 
-----------------------------------------
+------------------------------------------------------------
 
 data FileChangeStats = FileChangeStats { _changedFile  ∷ RelFile
                                        , _linesAdded   ∷ ℕ
                                        , _linesRemoved ∷ ℕ
                                        }
 
+----------------------------------------
+
+readℕ ∷ (AsProcOutputParseError ε, MonadError ε η) ⇒ 𝕋 → 𝕋 → η ℕ
+readℕ name t =
+  case readEither (T.unpack t) of
+    𝓛 e → throwAsProcOutputParseError $ [fmtT|failed to read %t '%t' as ℕ: %s|] name t e
+    𝓡 r → return r
+
+parseFileChangeStats ∷ (AsProcOutputParseError ε,AsFPathError ε,MonadError ε η)⇒
+                       𝕋 → η FileChangeStats
+parseFileChangeStats t =
+  let throwAP = throwAsProcOutputParseError
+  in  case T.splitOn "\t" t of
+        [added_,removed_,fn_] → do
+          let readℕ name t =
+                case readEither (T.unpack t) of
+                  𝓛 e → throwAP $ [fmtT|failed to read %t '%t' as ℕ: %s|] name t e
+                  𝓡 r → return r
+          added   ← readℕ "lines added"   added_
+          removed ← readℕ "lines removed" removed_
+          fn      ← FPath.Parseable.parse fn_
+          return $ FileChangeStats fn added removed
+
+        _ → throwAP $ [fmtT|failed to parse output line to git diff --numstat: %t|] t
+
+------------------------------------------------------------
+
 data StagedChangesFileStats  = StagedChangesFiles  FileChangeStats
 data WorkingChangesFileStats = WorkingChangesFiles FileChangeStats
+
+--------------------
 
 data GitChangedFilesStats =
   GitChangedFilesStats { _workingChangesFilesStats ∷ [WorkingChangesFileStats]
                        , _stagedChangesFilesStats  ∷ [StagedChangesFileStats]
                        }
 
+--------------------
+
 workingChangesFileStats ∷ Lens' GitChangedFilesStats [WorkingChangesFileStats]
 workingChangesFileStats =
   lens _workingChangesFilesStats (\ cfs w → cfs { _workingChangesFilesStats = w})
 
+--------------------
+
 workingChangesFileCount ∷ GitChangedFilesStats → ℕ
 workingChangesFileCount = ỻ ∘ (⊣ workingChangesFileStats)
+
+--------------------
 
 stagedChangesFileStats ∷ Lens' GitChangedFilesStats [StagedChangesFileStats]
 stagedChangesFileStats =
   lens _stagedChangesFilesStats (\ cfs s → cfs { _stagedChangesFilesStats = s })
 
+--------------------
+
 stagedChangesFileCount ∷ GitChangedFilesStats → ℕ
 stagedChangesFileCount = ỻ ∘ (⊣ stagedChangesFileStats)
+
+------------------------------------------------------------
 
 {-| Get the latest tag, the number of changes since then and the short name of
     the most recent commit -}
@@ -1267,51 +1367,19 @@ gitChangedFilesStats d = do
   -- use `git diff-files --quiet` to check for diffs between the working
   --                              directory and the index
 
---  staged_changes_files_count ← StagedChangesFileCount ∘ ỻ ⊳ git d ["diff", "--cached", "--numstat"∷𝕋]
+  working_file_diffs ← gits d ["diff", "--numstat"∷𝕋]
 
---  working_changes_files_count ← WorkingChangesFileCount ∘ ỻ ⊳ git d ["diff", "--numstat"∷𝕋]
+  working_changes_file_stats ← WorkingChangesFiles ⊳⊳ (mapM parseFileChangeStats working_file_diffs)
 
-{-
-[martyn:src:0]$ git diff --numstat
-138     102     flake.lock
-7       2       flake.nix
-32      19      src/battery.nix
-4       4       src/dezip.nix
-14      6       src/homelinks.nix
-17      17      src/init-home.nix
-221     49      src/st-cnflcts-dff.nix
-207     52      src/tmux-config.hs
--}
+  staged_file_diffs ← gits d ["diff", "--cached", "--numstat"∷𝕋]
+  staged_changes_file_stats ← StagedChangesFiles ⊳⊳ (mapM parseFileChangeStats staged_file_diffs)
 
-  working_file_diffs ← git d ["diff", "--numstat"∷𝕋]
-  let parse_numstat_line ∷ (AsProcOutputParseError ε, MonadError ε η) ⇒
-                           𝕋 → η FileChangeStats
-      parse_numstat_line t = case T.splitOn "\t" t of
-                               [added_,removed_,fn_] → do
-                                 let readE name typ t = case readEither (T.unpack t) of
-                                       𝓛 e → throwAsProcOutputParseError $ [fmtT|failed to read %t '%t' as %t: %s|] name t typ e
-                                       𝓡 r → return r
-                                 added   ← readE "lines added"   "ℕ" added_
-                                 removed ← readE "lines removed" "ℕ" removed_
-                                 fn      ← FPath.Parseable.parse fn_
-                                 return $ FileChangeStats fn added removed
-
-                               _ → throwAsProcOutputParseError $ [fmtT|failed to parse output line to git diff --numstat: %t|] t
-
-  working_changes_file_stats ← WorkingChangesFiles ⊳⊳ (mapM parse_numstat_line working_file_diffs)
-
-  staged_file_diffs ← git d ["diff", "--cached", "--numstat"∷𝕋]
---  let staged_changes_file_stats = _ ⊳ staged_file_diffs
-  staged_changes_file_stats ← StagedChangesFiles ⊳⊳ (mapM parse_numstat_line staged_file_diffs)
-
-  -- `git rev-list --left-right --count HEAD...origin/master will show something
-  -- like `35\t0` meaning that HEAD is 35 commits ahead of (remote) origin/master
-  -- and 0 commits behind
---  return (working_changes_files_count, staged_changes_files_count)
   return $
     GitChangedFilesStats { _workingChangesFilesStats = working_changes_file_stats
                          , _stagedChangesFilesStats  = staged_changes_file_stats
                          }
+
+----------------------------------------
 
 gitChangedFilesStatsTmuxSummary ∷ GitChangedFilesStats → 𝕋
 gitChangedFilesStatsTmuxSummary gcfs =
@@ -1321,13 +1389,20 @@ gitChangedFilesStatsTmuxSummary gcfs =
     (  0,sfc) → [fmt|⁑[%d]|]    sfc -- 🔯
     (wfc,sfc) → [fmt|%d⁂[%d]|] wfc sfc -- 🌠
 
-{-
-            𝓛 e → return $ T.take 8 $ toText e
-            𝓡 (WorkingChangesFileCount 0,StagedChangesFileCount 0) → return ""
-            𝓡 (WorkingChangesFileCount wfc, StagedChangesFileCount 0) → return $ [fmt|%d⭐|] wfc -- return "⭐" -- ᕯ
-            𝓡 (WorkingChangesFileCount 0, StagedChangesFileCount sfc) → return $ [fmt|🔯[%d]|] sfc -- ⁑
-            𝓡 (WorkingChangesFileCount wfc,StagedChangesFileCount sfc) → return $ [fmt|%d🌠[%d]|] wfc sfc -- ⁂
--}
+------------------------------------------------------------
+
+newtype TMuxStatusGitChangedFilesStats =
+  TMuxStatusGitChangedFilesStats GitChangedFilesStats
+
+----------
+
+instance Printable TMuxStatusGitChangedFilesStats where
+  print (TMuxStatusGitChangedFilesStats gcfs) = P.text $
+    case (workingChangesFileCount gcfs, stagedChangesFileCount gcfs) of
+      (  0,  0) → ""
+      (wfc,  0) → [fmt|%d★|]      wfc -- ⭐ -- ᕯ
+      (  0,sfc) → [fmt|⁑[%d]|]    sfc -- 🔯
+      (wfc,sfc) → [fmt|%d⁂[%d]|] wfc sfc -- 🌠
 
 ------------------------------------------------------------
 
@@ -1336,6 +1411,9 @@ gitChangedFilesStatsTmuxSummary gcfs =
        Printable ε, MonadError ε μ, MonadLog (Log MockIOClass) μ) =>
       α → β → μ ()
 cmd ‼ args = ꙩ (cmd,args) ≫ return ∘ snd
+
+spaces ∷ 𝕋 → 𝕋
+spaces t = " " ◇ t ◇ " "
 
 myMain ∷ ∀ ε . (HasCallStack, AsIOError ε, AsFPathError ε, AsCreateProcError ε,
                 AsProcOutputParseError ε, AsProcExitError ε, AsREParseError ε,
@@ -1387,18 +1465,13 @@ myMain opts = flip runReaderT NoMock $ do
   (tagname,tagchanges,_) ← ѥ @ScriptError (gitTagState (opts ⊣ dir)) ≫ \ case
                              𝓛 _  → return ("","","")
                              𝓡 xs → return xs
---  (staged_changes,working_changes) ← gitChangedFilesStats (opts ⊣ dir)
-{-
-  stw ← ѥ @ScriptError (gitChangedFilesStats (opts ⊣ dir)) ≫ \ case
+
+  stw ← ѥ @ScriptError (TMuxStatusGitChangedFilesStats ⊳ gitChangedFilesStats (opts ⊣ dir)) ≫ \ case
             𝓛 e → return $ T.take 8 $ toText e
-            𝓡 (WorkingChangesFileCount 0,StagedChangesFileCount 0) → return ""
-            𝓡 (WorkingChangesFileCount wfc, StagedChangesFileCount 0) → return $ [fmt|%d⭐|] wfc -- return "⭐" -- ᕯ
-            𝓡 (WorkingChangesFileCount 0, StagedChangesFileCount sfc) → return $ [fmt|🔯[%d]|] sfc -- ⁑
-            𝓡 (WorkingChangesFileCount wfc,StagedChangesFileCount sfc) → return $ [fmt|%d🌠[%d]|] wfc sfc -- ⁂
--}
-  stw ← ѥ @ScriptError (gitChangedFilesStats (opts ⊣ dir)) ≫ \ case
-            𝓛 e → return $ T.take 8 $ toText e
-            𝓡 cfs → return $ gitChangedFilesStatsTmuxSummary cfs
+            𝓡 cfs → return $ toText cfs
+
+  gcdf ← TMuxStatusGitCommitDiffCount ⊳ gitCommitDiffCount (opts ⊣ dir) "origin/master" "HEAD"
+  say $ [fmtT|gcdf: %T|] gcdf
 
   -- SessionName:WindowIndex.PaneIndex
   -- WE SHOULD SET THE STATUS TO USE #S, etc., RATHER THAN CALLING THIS
@@ -1413,6 +1486,7 @@ myMain opts = flip runReaderT NoMock $ do
                  , "ⓦ " ◇ (wan_ip {- ⧏ "UNKNOWN" -})
                  , remote_origin_base
                  , head_ref_base
+
                  , ю [ if tagchanges≡"0"
                        then "✓" ◇ tagname
                        else tagname ◇ "+" ◇ tagchanges
@@ -1428,7 +1502,7 @@ myMain opts = flip runReaderT NoMock $ do
                   in  zipWith (\ t (fg_,bg_) → colour_fmt t fg_ bg_)
                               (spaces ⊳ articles)
                               colours_left
-      left_sep ∷ ∀ ω . [(Colour8,Colour8)] → 𝕋
+      left_sep ∷ {- ∀ ω . -} [(Colour8,Colour8)] → 𝕋
       left_sep ((fg0,bg0):(fg1,bg1):_) | bg0 ≡ bg1 =
         -- use fg col with thin sep if two adjacent bgs are the same
         colour_fmt (separator (𝓛()) Thin) fg0 bg0
@@ -1438,22 +1512,25 @@ myMain opts = flip runReaderT NoMock $ do
       seps_left ∷ [𝕋]
       seps_left = left_sep ⊳ tails (colours_left ◇ [(Colour8 255, Colour8 0)])
 
-      seps_left' ∷ [𝕋]
-      seps_left' =
-        let colour_txt ∷ Colour8 → Colour8 → 𝕋
-            colour_txt = colour_fmt $ separator (𝓛()) Bold
-            -- the fg is the bg of the prior thing
-            fg_colours =  ((⊣ _2) ⊳ colours_left)
-            -- the bg is the fg of the next thing (with black at the end)
-            bg_colours = (((⊣ _2) ⊳ tailSafe colours_left) ◇ [Colour8 0])
-        in  -- we use the bg colours as the fg for the separator (that is,
-            -- the separator is in effect a colour inversion)
-            zipWith colour_txt fg_colours bg_colours
+  let separate ∷ 𝕋 → [𝕋] → [(Colour8,Colour8)] → 𝕋
+      separate sep vals cols =
+        let vals' = zipWith (\ t (fg_,bg_) → colour_fmt t fg_ bg_)
+                            (spaces ⊳ vals) cols
+            sep'  ∷ {- ∀ ω . -} [(Colour8,Colour8)] → 𝕋
+            sep' ((fg0,bg0):(fg1,bg1):_) = colour_fmt sep fg0 bg0
+            seps' = sep' ⊳ tails (cols ◇ [(Colour8 255, Colour8 0)])
+        in  ю ∘ ю $ zipWith (\ a b → [a,b]) vals' seps'
+                  ◇ [[toText ∘ tmf $ ꝏ & styleDef ]]
 
-  let left_status = ю ∘ ю $
+  let left_status ∷ 𝕋 = ю ∘ ю $
           zipWith (\ a b → [a,b]) vals_left seps_left
         ◇ [[toText ∘ tmf $ ꝏ & styleDef ]]
-  tmux_path ‼ ["display-message", left_status]
+
+
+--  tmux_path ‼ ["display-message", left_status]
+  traceShow ("left_status",left_status) $ return ()
+  traceShow ("separate",(separate (separator (𝓛()) Bold) articles colours_left)) $ return ()
+  tmux_path ‼ ["display-message", separate (separator (𝓛()) Bold) articles colours_left]
   return 0
 
 data BoldThin = Bold | Thin
