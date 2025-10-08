@@ -1506,71 +1506,43 @@ myMain opts = flip runReaderT NoMock $ do
                    ]
                  ]
 
-  forM_ (zip articles [0..]) ( \ (a,n) → say $ [fmtT|%02d: %L|] n a)
-
   let colour_fmt ∷ 𝕋 → (Colour8, Colour8) → 𝕋
       colour_fmt t (fg_,bg_) =
         [fmtT|%T%T|] (tmf $ ꝏ & fg ⊩ fg_ & bg ⊩ bg_ & styleDef) t
-{-
-      vals_left = let spaces t = " " ◇ t ◇ " "
-                  in  zipWith (\ t (fg_,bg_) → colour_fmt t fg_ bg_)
-                              (spaces ⊳ articles)
-                              colours_left
--}
-{-
-      left_sep ∷ {- ∀ ω . -} [(Colour8,Colour8)] → 𝕋
-      left_sep ((fg0,bg0):(fg1,bg1):_) | bg0 ≡ bg1 =
-        -- use fg col with thin sep if two adjacent bgs are the same
-        colour_fmt (separator (𝓛()) Thin) fg0 bg0
-                                       | otherwise =
-        colour_fmt (separator (𝓛()) Bold) bg0 bg1
--}
-{-
-      seps_left ∷ [𝕋]
-      seps_left = left_sep ⊳ tails (colours_left ◇ [(Colour8 255, Colour8 0)])
--}
 
   let join_bold ∷ 𝕋 → [𝕋] → [(Colour8,Colour8)] → 𝕋
       join_bold sep vals cols =
         let vals' = zipWith (\ t (fg_,bg_) → colourFmt t (fg_,bg_))
                             (spaces ⊳ vals) cols
-            sep'  ∷ {- ∀ ω . -} [(Colour8,Colour8)] → 𝕋
-            sep' ((fg0,bg0):(fg1,bg1):_) = colourFmt sep (bg0,bg1)
+            sep'  ∷ [(Colour8,Colour8)] → 𝕋
+            sep' ((_fg0,bg0):(_fg1,bg1):_) = colourFmt sep (bg0,bg1)
             seps' = sep' ⊳ tails (cols ◇ [(Colour8 255, Colour8 0)])
         in  ю ∘ ю $ zipWith (\ a b → [a,b]) vals' seps'
                   ◇ [[toText ∘ tmf $ ꝏ & styleDef ]]
+
+      join_outer :: 𝕋 → [(𝕋,(Colour8,Colour8))] → 𝕋
+      join_outer sep vals_cols =
+        let join_two ∷ (Colour8,Colour8) → (Colour8,Colour8) → 𝕋
+            join_two (_fg_,bg_) (_fg_',bg_') = colourFmt sep (bg_,bg_')
+            go ∷ [(𝕋,(Colour8,Colour8))] → 𝕋
+            go (vc:vc':xs) = go [vc] ◇ join_two (snd vc) (snd vc') ◇ go (vc':xs)
+            go [(t,(fg_,bg_))] = t -- colourFmt t (fg_,bg_)
+            go [] = ""
+        in go vals_cols
 
   let join_thin ∷ 𝕋 → [𝕋] → (Colour8,Colour8) → 𝕋
       join_thin sep vals (fg_,bg_) =
         colourFmt (T.intercalate (spaces sep) vals) (fg_,bg_)
 
-{-
-        let vals' = (\ t → {- colourFmt t (fg_,bg_) -} t) ⊳ (spaces ⊳ vals)
-            -- sep'  ∷ {- ∀ ω . -} [(Colour8,Colour8)] → 𝕋
-            sep'  = colourFmt sep (fg_,bg_)
-            -- seps' = sep' ⊳ tails (cols ◇ [(Colour8 255, Colour8 0)])
-        in  flip colourFmt (fg_,bg_) $
-              ю ∘ ю $ zipWith (\ a b → [a,b]) vals' (repeat sep)
-                    ◇ [[toText ∘ tmf $ ꝏ & styleDef ]]
--}
-
-{-
-  let left_status ∷ 𝕋 = ю ∘ ю $
-          zipWith (\ a b → [a,b]) vals_left seps_left
-        ◇ [[toText ∘ tmf $ ꝏ & styleDef ]]
--}
-
-  let inner_articles ∷ [𝕋] = (\ (a,cs) → join_thin (separator (𝓛()) Thin) a cs) ⊳ zip articles colours_left'
+  let inner_articles ∷ [𝕋] = (\ (a,cs) → join_thin (separator (𝓛()) Thin) a cs) ⊳ zip (spaces ⊳⊳ articles) colours_left'
   let outer_articles ∷ 𝕋 = join_bold (separator (𝓛()) Bold) inner_articles colours_left'
---  tmux_path ‼ ["display-message", left_status]
---  traceShow ("left_status",left_status) $ return ()
-  forM_ (zip3 articles [0..] colours_left') (\ (as,i,cs) → say $ [fmtT|article %02d: %w (%w)|] i (join_bold (separator (𝓛()) Bold) as colours_left') cs)
-  traceShow ("inner_articles", inner_articles) $ forM_ (zip3 articles [0..] colours_left') (\ (as,i,cs) → say $ [fmtT|article %02d: %w (%w)|] i (join_thin (separator (𝓛()) Thin) as (cs)) cs)
-  traceShow ("join_bold",(join_bold (separator (𝓛()) Bold) (ю ⊳ articles) colours_left)) $ return ()
-  traceShow ("XX",join_bold (separator (𝓛()) Bold) inner_articles colours_left') $ tmux_path ‼ ["display-message", join_bold (separator (𝓛()) Bold) (ю ⊳ articles) colours_left]
+  let outer_articles' ∷ 𝕋 = join_outer (separator (𝓛()) Bold) (zip inner_articles colours_left')
 
---  forM_ inner_articles (\ t → tmux_path ‼ ["display-message", t] >> liftIO (threadDelay 1000000))
-  tmux_path ‼ ["display-message", "-d", "2000000", outer_articles]
+  say $ [fmtT|inner_articles : %w|] inner_articles
+  say $ [fmtT|outer_articles : %w|] outer_articles
+  say $ [fmtT|outer_articles': %w|] outer_articles'
+
+  tmux_path ‼ ["display-message", "-d", "5000", outer_articles']
   return 0
 
 data BoldThin = Bold | Thin
