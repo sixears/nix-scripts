@@ -10,35 +10,26 @@
 
 import Base1
 
-import Debug.Trace  ( traceShow )
-import Prelude  ( Int, error, round )
+import Prelude  ( error, round )
 
 -- base --------------------------------
 
-import Control.Concurrent  ( threadDelay )
 import Control.Exception   ( Handler( Handler ), SomeException
-                           , catch, catches, displayException )
-import Data.Bool           ( bool )
-import Data.Char           ( isAlphaNum, isAscii, isControl, isSpace )
-import Data.Function       ( flip )
-import Data.List           ( intercalate, repeat, reverse, sortOn, tails, take
-                           , takeWhile, zip, zipWith, zip3 )
+                           , catches, displayException )
+import Data.Char           ( isAlphaNum, isAscii, isControl )
+import Data.List           ( intercalate, reverse, sortOn, take
+                           , takeWhile, zip )
 import Data.Maybe          ( catMaybes )
-import System.IO.Error     ( ioeGetErrorString )
 import System.Timeout      ( timeout )
 import Text.Read           ( readEither )
 
 -- base-unicode-symbols ----------------
 
-import Prelude.Unicode  ( (×), (≠) )
+import Prelude.Unicode  ( (≠) )
 
 -- bytestring --------------------------
 
 import Data.ByteString.Lazy  qualified as LBS
-
--- containers --------------------------
-
-import Data.Set  qualified as  Set
 
 -- domainnames -------------------------
 
@@ -56,10 +47,10 @@ import Control.Monad.Catch  ( MonadMask )
 
 import FPath.Parseable  qualified
 
-import FPath.AbsDir            ( AbsDir, absdir )
+import FPath.AbsDir            ( AbsDir )
 import FPath.AbsFile           ( AbsFile, absfile )
 import FPath.Error.FPathError  ( AsFPathError, FPathError )
-import FPath.Parseable         ( Parseable, parseDir, readM )
+import FPath.Parseable         ( Parseable, parseDir )
 import FPath.RelFile           ( RelFile )
 
 -- http-client -------------------------
@@ -72,12 +63,11 @@ import Network.HTTP.Client.TLS      ( tlsManagerSettings )
 
 -- ip4 ---------------------------------
 
-import IP4  ( IP4, ip4 )
+import IP4  ( IP4 )
 
 -- lens --------------------------------
 
 import Control.Lens.Lens  ( Lens )
-import Control.Lens.Tuple ( _2 )
 
 -- logging-effect ----------------------
 
@@ -104,7 +94,7 @@ import MockIO.Process.MLCmdSpec  ( MLCmdSpec, ToMLCmdSpec )
 
 -- monaderror-io -----------------------
 
-import MonadError.IO.Error  ( AsIOError( _IOErr ), IOError, throwUserError )
+import MonadError.IO.Error  ( throwUserError )
 
 -- monadio-plus ------------------------
 
@@ -112,16 +102,11 @@ import MonadIO                        ( say )
 import MonadIO.Base                   ( getArgs )
 import MonadIO.Error.CreateProcError  ( AsCreateProcError )
 import MonadIO.Error.ProcExitError    ( AsProcExitError )
-import MonadIO.Process.CmdSpec        ( cwd, expExitVal )
-import MonadIO.Process.ExitInfo       ( ExitInfo )
-import MonadIO.Process.ExitStatus     ( ExitStatus( ExitVal, ExitSig ), exitVal )
+import MonadIO.Process.CmdSpec        ( cwd )
 
 -- more-unicode ------------------------
 
-import Data.MoreUnicode.Bool    ( pattern 𝓣, pattern 𝓕 )
-import Data.MoreUnicode.Either  ( pattern 𝓛, pattern 𝓡 )
-import Data.MoreUnicode.Lens    ( (⊩) )
-import Data.MoreUnicode.Maybe   ( pattern 𝓙, pattern 𝓝, (⧐), (⧏) )
+import Data.MoreUnicode.Lens  ( (⊩) )
 
 -- mtl ---------------------------------
 
@@ -141,34 +126,21 @@ import Network.Info  ( getNetworkInterfaces )
 import Options.Applicative        ( argument, eitherReader, metavar )
 import Options.Applicative.Types  ( Parser, ReadM )
 
--- parsec-plus-base --------------------
-
-import Parsec.Error  ( throwAsParseError )
-
 -- parsec-plus -------------------------
 
-import ParsecPlus  ( AsParseError, Parsecable, ParseError, parsec, parser,parse )
-
--- parsers -----------------------------
-
-import Text.Parser.Combinators  ( eof )
+import ParsecPlus  ( AsParseError, Parsecable, parsec )
 
 -- pcre --------------------------------
 
 import PCRE          ( PCRE, compRE )
 import PCRE.Error    ( AsREParseError, PCREScriptError )
-import PCRE.GroupID  ( GroupID( GIDName,GIDNum ) )
-import PCRE.REMatch  ( (~~), (≃) )
-
--- safe --------------------------------
-
-import Safe  ( tailSafe )
+import PCRE.GroupID  ( GroupID( GIDName ) )
+import PCRE.REMatch  ( (≃) )
 
 -- stdmain -----------------------------
 
 import StdMain                       ( stdMainNoDR )
 import StdMain.ProcOutputParseError  ( AsProcOutputParseError, ScriptError
-                                     , UsageParseFPProcIOOPError
                                      , throwAsProcOutputParseError )
 
 -- tasty -------------------------------
@@ -196,9 +168,6 @@ import Data.Text.Encoding  ( decodeUtf8 )
 import qualified Text.Printer  as P
 
 --------------------------------------------------------------------------------
-
-(~~~) ∷ 𝕋 → PCRE → 𝕄 𝕋
-t ~~~ r = bool 𝓝 (𝓙 t) (t ~~ r)
 
 ð ∷ Default α => α
 ð = def
@@ -1066,8 +1035,8 @@ instance ToTextss [TMuxConfig] where
 -}
 
 {-| catch even "runtime" exceptions, throw them as UserErrors -}
-catchUserE ∷ ∀ ε α η . (AsIOError ε, MonadError ε η) ⇒ IO (η α) → IO (η α)
-catchUserE io = catch io (\ (e∷SomeException) → ѥ (throwUserError $ show e))
+-- catchUserE ∷ ∀ ε α η . (AsIOError ε, MonadError ε η) ⇒ IO (η α) → IO (η α)
+-- catchUserE io = catch io (\ (e∷SomeException) → ѥ (throwUserError $ show e))
 
 ----------------------------------------
 
@@ -1129,8 +1098,7 @@ httpRequest url timeoutμs = do
 wanIP ∷ MonadIO μ ⇒ μ 𝕋
 wanIP =
   let url     = "http://whatismyip.akamai.com"
-      timeout = SECS 2
-  in  ѥ (httpRequest @ScriptError @IP4 url timeout) ⊲ \ case
+  in  ѥ (httpRequest @ScriptError @IP4 url (SECS 2)) ⊲ \ case
         𝓛 e     → T.take 15 $ toText e
         𝓡 (𝓙 r) → toText r
         𝓡 𝓝     → "NONE"
@@ -1140,12 +1108,6 @@ wanIP =
 -- add this to MLCmdSpec or similar
 mlCmdSpecSetCWD ∷ AbsDir → MLCmdSpec ξ → MLCmdSpec ξ
 mlCmdSpecSetCWD d mlcs = mlcs & cwd ⊢ 𝓙 d
-
-mlCmdSpecSetExpExitVal ∷ Set.Set Word8 → MLCmdSpec ξ → MLCmdSpec ξ
-mlCmdSpecSetExpExitVal exp mlcs = mlcs & expExitVal ⊢ exp
-
-mlCExpBool ∷ MLCmdSpec ξ → MLCmdSpec ξ
-mlCExpBool = mlCmdSpecSetExpExitVal (fromList [0,1])
 
 -- add this to PCRE?
 {-| Match an RE, pick out a named/numbered group -}
@@ -1168,7 +1130,6 @@ gitRemoteOriginBase ∷ ∀ ε δ μ .
                        MonadLog (Log MockIOClass) μ) ⇒
                       AbsDir → μ 𝕋
 gitRemoteOriginBase d = do
-  let setCWD = mlCmdSpecSetCWD @𝕋 d
   remote_origin ← git d ["config", "--get", "remote.origin.url"]
 
   basename_re ← compRE "^git@[\\w.]+:([-\\w/]+/)*${name}([-\\w]+)\\.git$"
@@ -1245,6 +1206,7 @@ gitCommitDiffCount d from {-^ e.g., "origin/master -} to {-^ e.g., "HEAD" -} = d
       ahead  ← readℕ "commits ahead" ahead_
       behind ← readℕ "commits behind" behind_
       return $ GitCommitDiffCount d from to ahead behind
+    _ → throwAsProcOutputParseError $ [fmtT|no parse of rev-list: '%t'|] head_ref
 
 newtype TMuxStatusGitCommitDiffCount =
   TMuxStatusGitCommitDiffCount GitCommitDiffCount
@@ -1265,7 +1227,6 @@ gitTagState ∷ ∀ ε δ μ .
                MonadLog (Log MockIOClass) μ) ⇒
               AbsDir → μ (𝕋,𝕋,𝕋)
 gitTagState d = do
-  let setCWD = mlCmdSpecSetCWD @𝕋 d
   tag_state ← git d ["describe", "--tags", "--long"]
 
   let (tagname,tagchanges,tagref) =
@@ -1289,7 +1250,8 @@ data FileChangeStats = FileChangeStats { _changedFile  ∷ RelFile
 readℕ ∷ (AsProcOutputParseError ε, MonadError ε η) ⇒ 𝕋 → 𝕋 → η ℕ
 readℕ name t =
   case readEither (T.unpack t) of
-    𝓛 e → throwAsProcOutputParseError $ [fmtT|failed to read %t '%t' as ℕ: %s|] name t e
+    𝓛 e → throwAsProcOutputParseError $
+            [fmtT|failed to read %t '%t' as ℕ: %s|] name t e
     𝓡 r → return r
 
 parseFileChangeStats ∷ (AsProcOutputParseError ε,AsFPathError ε,MonadError ε η)⇒
@@ -1298,16 +1260,12 @@ parseFileChangeStats t =
   let throwAP = throwAsProcOutputParseError
   in  case T.splitOn "\t" t of
         [added_,removed_,fn_] → do
-          let readℕ name t =
-                case readEither (T.unpack t) of
-                  𝓛 e → throwAP $ [fmtT|failed to read %t '%t' as ℕ: %s|] name t e
-                  𝓡 r → return r
           added   ← readℕ "lines added"   added_
           removed ← readℕ "lines removed" removed_
           fn      ← FPath.Parseable.parse fn_
           return $ FileChangeStats fn added removed
 
-        _ → throwAP $ [fmtT|failed to parse output line to git diff --numstat: %t|] t
+        _ → throwAP $ [fmtT|no parse of output line to git diff --numstat: %t|] t
 
 ------------------------------------------------------------
 
@@ -1345,6 +1303,30 @@ stagedChangesFileCount = ỻ ∘ (⊣ stagedChangesFileStats)
 
 ------------------------------------------------------------
 
+gitWorkingChangesFileStats ∷ ∀ ε δ μ .
+                             (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+                              AsProcOutputParseError ε, AsFPathError ε,
+                              AsCreateProcError ε, AsProcExitError ε,
+                              AsIOError ε, Printable ε, MonadError ε μ,
+                              MonadLog (Log MockIOClass) μ) ⇒
+                             AbsDir → μ [WorkingChangesFileStats]
+gitWorkingChangesFileStats d = do
+  working_file_diffs ← gits d ["diff", "--numstat"∷𝕋]
+  WorkingChangesFiles ⊳⊳ (mapM parseFileChangeStats working_file_diffs)
+
+--------------------
+
+gitStagedChangesFileStats ∷ ∀ ε δ μ .
+                             (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+                              AsProcOutputParseError ε, AsFPathError ε,
+                              AsCreateProcError ε, AsProcExitError ε,
+                              AsIOError ε, Printable ε, MonadError ε μ,
+                              MonadLog (Log MockIOClass) μ) ⇒
+                             AbsDir → μ [StagedChangesFileStats]
+gitStagedChangesFileStats d = do
+  working_file_diffs ← gits d ["diff", "--cached", "--numstat"∷𝕋]
+  StagedChangesFiles ⊳⊳ (mapM parseFileChangeStats working_file_diffs)
+
 {-| Get the latest tag, the number of changes since then and the short name of
     the most recent commit -}
 gitChangedFilesStats ∷ ∀ ε δ μ .
@@ -1354,9 +1336,6 @@ gitChangedFilesStats ∷ ∀ ε δ μ .
                MonadLog (Log MockIOClass) μ) ⇒
               AbsDir → μ GitChangedFilesStats
 gitChangedFilesStats d = do
-  let set_context ∷ MLCmdSpec () → MLCmdSpec ()
-      set_context = mlCmdSpecSetCWD d ∘ mlCExpBool
-
   -- the "index" is files we have staged for commit; but not yet committed
 
   -- use `git diff-index --quiet HEAD --` to check for diffs between working
@@ -1368,27 +1347,13 @@ gitChangedFilesStats d = do
   -- use `git diff-files --quiet` to check for diffs between the working
   --                              directory and the index
 
-  working_file_diffs ← gits d ["diff", "--numstat"∷𝕋]
-
-  working_changes_file_stats ← WorkingChangesFiles ⊳⊳ (mapM parseFileChangeStats working_file_diffs)
-
-  staged_file_diffs ← gits d ["diff", "--cached", "--numstat"∷𝕋]
-  staged_changes_file_stats ← StagedChangesFiles ⊳⊳ (mapM parseFileChangeStats staged_file_diffs)
+  working_changes_file_stats ← gitWorkingChangesFileStats d
+  staged_changes_file_stats ← gitStagedChangesFileStats d
 
   return $
     GitChangedFilesStats { _workingChangesFilesStats = working_changes_file_stats
                          , _stagedChangesFilesStats  = staged_changes_file_stats
                          }
-
-----------------------------------------
-
-gitChangedFilesStatsTmuxSummary ∷ GitChangedFilesStats → 𝕋
-gitChangedFilesStatsTmuxSummary gcfs =
-  case (workingChangesFileCount gcfs, stagedChangesFileCount gcfs) of
-    (  0,  0) → ""
-    (wfc,  0) → [fmt|%d★|]      wfc -- ⭐ -- ᕯ
-    (  0,sfc) → [fmt|⁑[%d]|]    sfc -- 🔯
-    (wfc,sfc) → [fmt|%d⁂[%d]|] wfc sfc -- 🌠
 
 ------------------------------------------------------------
 
@@ -1438,16 +1403,6 @@ myMain opts = flip runReaderT NoMock $ do
             ]
 
       -- these are tmux' colour numbers, run tmux-colours to see them all
-      colours_left = [ -- (fg_colour, bg_colour)
-                       (Colour8 234    {- black -}, Colour8 148 {- yellow -})
-                     , (Colour8 255    {- white -}, Colour8  90 {- magenta -})
-                     , (Colour8 255    {- white -}, Colour8  24 {- dusky blue -})
-                     , (Colour8 255    {- white -}, Colour8  24 {- dusky blue -})
-                     , (Colour8  88 {- deep red -}, Colour8  29 {- grey blue -})
-                     , (Colour8  88 {- deep red -}, Colour8  29 {- grey blue -})
-                     , (Colour8  88 {- deep red -}, Colour8  29 {- grey blue -})
-                     ]
-
       colours_left' = [ -- (fg_colour, bg_colour)
                         (Colour8 234    {- black -}, Colour8 148 {- yellow -})
                       , (Colour8 255    {- white -}, Colour8  90 {- magenta -})
@@ -1481,6 +1436,7 @@ myMain opts = flip runReaderT NoMock $ do
             𝓛 e → return $ T.take 8 $ toText e
             𝓡 cfs → return $ toText cfs
 
+  -- XXX USE THIS
   gcdf ← TMuxStatusGitCommitDiffCount ⊳ gitCommitDiffCount (opts ⊣ dir) "origin/master" "HEAD"
   say $ [fmtT|gcdf: %T|] gcdf
 
@@ -1506,27 +1462,13 @@ myMain opts = flip runReaderT NoMock $ do
                    ]
                  ]
 
-  let colour_fmt ∷ 𝕋 → (Colour8, Colour8) → 𝕋
-      colour_fmt t (fg_,bg_) =
-        [fmtT|%T%T|] (tmf $ ꝏ & fg ⊩ fg_ & bg ⊩ bg_ & styleDef) t
-
-  let join_bold ∷ 𝕋 → [𝕋] → [(Colour8,Colour8)] → 𝕋
-      join_bold sep vals cols =
-        let vals' = zipWith (\ t (fg_,bg_) → colourFmt t (fg_,bg_))
-                            (spaces ⊳ vals) cols
-            sep'  ∷ [(Colour8,Colour8)] → 𝕋
-            sep' ((_fg0,bg0):(_fg1,bg1):_) = colourFmt sep (bg0,bg1)
-            seps' = sep' ⊳ tails (cols ◇ [(Colour8 255, Colour8 0)])
-        in  ю ∘ ю $ zipWith (\ a b → [a,b]) vals' seps'
-                  ◇ [[toText ∘ tmf $ ꝏ & styleDef ]]
-
-      join_outer :: 𝕋 → [(𝕋,(Colour8,Colour8))] → 𝕋
+  let join_outer :: 𝕋 → [(𝕋,(Colour8,Colour8))] → 𝕋
       join_outer sep vals_cols =
         let join_two ∷ (Colour8,Colour8) → (Colour8,Colour8) → 𝕋
             join_two (_fg_,bg_) (_fg_',bg_') = colourFmt sep (bg_,bg_')
             go ∷ [(𝕋,(Colour8,Colour8))] → 𝕋
             go (vc:vc':xs) = go [vc] ◇ join_two (snd vc) (snd vc') ◇ go (vc':xs)
-            go [(t,(fg_,bg_))] = t -- colourFmt t (fg_,bg_)
+            go [(t,_)] = t
             go [] = ""
         in go vals_cols
 
@@ -1535,14 +1477,12 @@ myMain opts = flip runReaderT NoMock $ do
         colourFmt (T.intercalate (spaces sep) vals) (fg_,bg_)
 
   let inner_articles ∷ [𝕋] = (\ (a,cs) → join_thin (separator (𝓛()) Thin) a cs) ⊳ zip (spaces ⊳⊳ articles) colours_left'
-  let outer_articles ∷ 𝕋 = join_bold (separator (𝓛()) Bold) inner_articles colours_left'
-  let outer_articles' ∷ 𝕋 = join_outer (separator (𝓛()) Bold) (zip inner_articles colours_left')
+  let outer_articles ∷ 𝕋 = join_outer (separator (𝓛()) Bold) (zip (inner_articles◇[""]) (colours_left'◇[(Colour8 234, Colour8 234)]))
 
   say $ [fmtT|inner_articles : %w|] inner_articles
-  say $ [fmtT|outer_articles : %w|] outer_articles
-  say $ [fmtT|outer_articles': %w|] outer_articles'
+  say $ [fmtT|outer_articles: %w|] outer_articles
 
-  tmux_path ‼ ["display-message", "-d", "5000", outer_articles']
+  tmux_path ‼ ["display-message", "-d", "5000", outer_articles]
   return 0
 
 data BoldThin = Bold | Thin
