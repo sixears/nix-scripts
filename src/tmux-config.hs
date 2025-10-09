@@ -1387,6 +1387,9 @@ colourFmt t (fg_,bg_) = [fmtT|%T%T|] (tmf $ ꝏ & fg ⊩ fg_ & bg ⊩ bg_ & styl
 ----------------------------------------
 
 -- `ip monitor -tshort address` to see addresses come & go
+-- output e.g.,
+-- [2025-10-09T12:42:14.472565] Deleted 2: wlp0s20f3    inet 192.168.0.10/24 brd 192.168.0.255 scope global noprefixroute wlp0s20f3
+-- [2025-10-09T12:42:18.677739] 2: wlp0s20f3    inet 192.168.0.10/24 brd 192.168.0.255 scope global noprefixroute wlp0s20f3
 lanWanIPs ∷ MonadIO μ ⇒ μ [𝕋]
 lanWanIPs = do
   lan_ips ← lanIPs
@@ -1403,6 +1406,32 @@ lanWanIPs = do
 --         , "ⓦ " ◇ (wan_ip {- ⧏ "UNKNOWN" -})
 --         ]
 
+----------------------------------------
+
+gitStatus ∷ ∀ ε δ μ . (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+                       AsFPathError ε, AsREParseError ε, AsCreateProcError ε,
+                       AsProcExitError ε,AsIOError ε,Printable ε,MonadError ε μ,
+                       MonadLog (Log MockIOClass) μ) ⇒
+            AbsDir → μ [𝕋]
+gitStatus d = do
+  remote_origin_base ← gitRemoteOriginBase d
+  head_ref_base ← gitSymbolicRefHeadBase d
+  (tagname,tagchanges,_) ← ѥ @ScriptError (gitTagState d) ≫ \ case
+                             𝓛 _  → return ("","","")
+                             𝓡 xs → return xs
+
+  stw ← ѥ @ScriptError (TMuxStatusGitChangedFilesStats ⊳ gitChangedFilesStats d) ≫ \ case
+            𝓛 e → return $ T.take 8 $ toText e
+            𝓡 cfs → return $ toText cfs
+
+  return [ remote_origin_base
+         , head_ref_base
+         , ю [ if tagchanges≡"0"
+               then "✓" ◇ tagname
+               else tagname ◇ "+" ◇ tagchanges
+             , case stw of "" → ""; _ → " «" ◇ stw ◇ "»"
+             ]
+         ]
 
 ----------------------------------------
 
@@ -1440,16 +1469,6 @@ myMain opts = flip runReaderT NoMock $ do
   liftIO getNetworkInterfaces ≫ say ∘ [fmtT|getNetworkInterfaces: %w|]
 
   -- encapsulate into a function
-        -- check git rev-parse --is-inside-work-tree
-  remote_origin_base ← gitRemoteOriginBase (opts ⊣ dir)
-  head_ref_base ← gitSymbolicRefHeadBase (opts ⊣ dir)
-  (tagname,tagchanges,_) ← ѥ @ScriptError (gitTagState (opts ⊣ dir)) ≫ \ case
-                             𝓛 _  → return ("","","")
-                             𝓡 xs → return xs
-
-  stw ← ѥ @ScriptError (TMuxStatusGitChangedFilesStats ⊳ gitChangedFilesStats (opts ⊣ dir)) ≫ \ case
-            𝓛 e → return $ T.take 8 $ toText e
-            𝓡 cfs → return $ toText cfs
 
   -- XXX USE THIS
   gcdf ← TMuxStatusGitCommitDiffCount ⊳ gitCommitDiffCount (opts ⊣ dir) "origin/master" "HEAD"
@@ -1460,18 +1479,13 @@ myMain opts = flip runReaderT NoMock $ do
   (_,[sess_win_pane∷𝕋]) ← ꙩ (tmux_path,["display-message"∷𝕋, "-p", "#S:#I.#P"])
 
   lan_wan_ips ← lanWanIPs
+  -- use `git rev-parse --is-inside-work-tree` to see if we're in a git dir
+  git_status ← gitStatus (opts ⊣ dir)
   let articles ∷ [[𝕋]]
       articles = [ [ sess_win_pane ]
                  , [ toText $ hostlocal host ]
                  , lan_wan_ips
-                 , [ remote_origin_base
-                   , head_ref_base
-                   , ю [ if tagchanges≡"0"
-                         then "✓" ◇ tagname
-                         else tagname ◇ "+" ◇ tagchanges
-                       , case stw of "" → ""; _ → " «" ◇ stw ◇ "»"
-                       ]
-                   ]
+                 , git_status
                  ]
 
   let join_outer :: 𝕋 → [(𝕋,(Colour8,Colour8))] → 𝕋
