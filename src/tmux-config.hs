@@ -1384,6 +1384,28 @@ spaces t = " " ◇ t ◇ " "
 colourFmt ∷ 𝕋 → (Colour8, Colour8) → 𝕋
 colourFmt t (fg_,bg_) = [fmtT|%T%T|] (tmf $ ꝏ & fg ⊩ fg_ & bg ⊩ bg_ & styleDef) t
 
+----------------------------------------
+
+-- `ip monitor -tshort address` to see addresses come & go
+lanWanIPs ∷ MonadIO μ ⇒ μ [𝕋]
+lanWanIPs = do
+  lan_ips ← lanIPs
+  wan_ip ← case lan_ips of
+             LanIPs [] → return ""
+             _         → wanIP
+
+  let lan_ips_str = case unLanIPs lan_ips of
+                      []  → "NONE"
+                      ips → T.intercalate "," (T.pack ∘ show ⊳ ips)
+  return $ "ⓛ " ◇ lan_ips_str : case wan_ip of "" → []; _ → ["ⓦ " ◇ wan_ip]
+-- XXX don't even try if there is no route?
+-- XXX just drop this if there is no wan_ip
+--         , "ⓦ " ◇ (wan_ip {- ⧏ "UNKNOWN" -})
+--         ]
+
+
+----------------------------------------
+
 myMain ∷ ∀ ε . (HasCallStack, AsIOError ε, AsFPathError ε, AsCreateProcError ε,
                 AsProcOutputParseError ε, AsProcExitError ε, AsREParseError ε,
                 AsParseError ε, Printable ε) ⇒
@@ -1416,13 +1438,6 @@ myMain opts = flip runReaderT NoMock $ do
   host ← hostname Informational
 
   liftIO getNetworkInterfaces ≫ say ∘ [fmtT|getNetworkInterfaces: %w|]
-  -- `ip monitor -tshort address` to see addresses come & go
-  lan_ips ← lanIPs
-  say $ [fmtT|lan_ips: %w|] lan_ips
-  wan_ip ← case lan_ips of
-             LanIPs [] → return ""
-             _         → wanIP
-  say $ [fmtT|wan_ip: %w|] wan_ip
 
   -- encapsulate into a function
         -- check git rev-parse --is-inside-work-tree
@@ -1444,14 +1459,11 @@ myMain opts = flip runReaderT NoMock $ do
   -- WE SHOULD SET THE STATUS TO USE #S, etc., RATHER THAN CALLING THIS
   (_,[sess_win_pane∷𝕋]) ← ꙩ (tmux_path,["display-message"∷𝕋, "-p", "#S:#I.#P"])
 
+  lan_wan_ips ← lanWanIPs
   let articles ∷ [[𝕋]]
       articles = [ [ sess_win_pane ]
                  , [ toText $ hostlocal host ]
-                 , [ "ⓛ " ◇ (case unLanIPs lan_ips of [] → "NONE"; ips → T.intercalate "," (T.pack ∘ show ⊳ ips))
--- XXX don't even try if there is no route?
--- XXX just drop this if there is no wan_ip
-                   , "ⓦ " ◇ (wan_ip {- ⧏ "UNKNOWN" -})
-                   ]
+                 , lan_wan_ips
                  , [ remote_origin_base
                    , head_ref_base
                    , ю [ if tagchanges≡"0"
