@@ -1476,13 +1476,19 @@ myMain opts = flip runReaderT NoMock $ do
 
   -- SessionName:WindowIndex.PaneIndex
   -- WE SHOULD SET THE STATUS TO USE #S, etc., RATHER THAN CALLING THIS
-  (_,[sess_win_pane∷𝕋]) ← ꙩ (tmux_path,["display-message"∷𝕋, "-p", "#S:#I.#P"])
+  let sess_win_pane ∷ ∀ ε δ μ .
+                      (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+                       AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
+                       AsIOError ε, Printable ε, MonadError ε μ,
+                       MonadLog (Log MockIOClass) μ) ⇒ μ [𝕋]
+      sess_win_pane = snd ⊳ ꙩ (tmux_path,["display-message"∷𝕋, "-p", "#S:#I.#P"])
 
+  sess_win_pane' ← sess_win_pane
   lan_wan_ips ← lanWanIPs
   -- use `git rev-parse --is-inside-work-tree` to see if we're in a git dir
   git_status ← gitStatus (opts ⊣ dir)
   let articles ∷ [[𝕋]]
-      articles = [ [ sess_win_pane ]
+      articles = [ sess_win_pane'
                  , [ toText $ hostlocal host ]
                  , lan_wan_ips
                  , git_status
