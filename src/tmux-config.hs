@@ -20,6 +20,7 @@ import Data.Char           ( isAlphaNum, isAscii, isControl )
 import Data.List           ( intercalate, reverse, sortOn, take
                            , takeWhile, zip )
 import Data.Maybe          ( catMaybes )
+import Data.Tuple          ( uncurry )
 import System.Timeout      ( timeout )
 import Text.Read           ( readEither )
 
@@ -1099,7 +1100,7 @@ wanIP ∷ MonadIO μ ⇒ μ 𝕋
 wanIP =
   let url     = "http://whatismyip.akamai.com"
   in  ѥ (httpRequest @ScriptError @IP4 url (SECS 2)) ⊲ \ case
-        𝓛 e     → T.take 15 $ toText e
+        𝓛 _e    → "-ERR- " -- ◇ T.take 8 (toText e)
         𝓡 (𝓙 r) → toText r
         𝓡 𝓝     → "NONE"
 
@@ -1414,6 +1415,7 @@ gitStatus ∷ ∀ ε δ μ . (MonadIO μ, HasDoMock δ, MonadReader δ μ,
                        MonadLog (Log MockIOClass) μ) ⇒
             AbsDir → μ [𝕋]
 gitStatus d = do
+  -- use `git rev-parse --is-inside-work-tree` to see if we're in a git dir
   remote_origin_base ← gitRemoteOriginBase d
   head_ref_base ← gitSymbolicRefHeadBase d
   (tagname,tagchanges,_) ← ѥ @ScriptError (gitTagState d) ≫ \ case
@@ -1453,18 +1455,9 @@ myMain opts = flip runReaderT NoMock $ do
                         (tmf $ NatLit (ỻ formats))
             ]
 
-      -- these are tmux' colour numbers, run tmux-colours to see them all
-      colours_left' = [ -- (fg_colour, bg_colour)
-                        (Colour8 234    {- black -}, Colour8 148 {- yellow -})
-                      , (Colour8 255    {- white -}, Colour8  90 {- magenta -})
-                      , (Colour8 255    {- white -}, Colour8  24 {- dusky blue -})
-                      , (Colour8  88 {- deep red -}, Colour8  29 {- grey blue -})
-                      ]
 
   -- emit a tmux command for each (set-option) in status_format
   forM_ (toTextss status_format) (tmux_path ‼)
-
-  host ← hostname Informational
 
   liftIO getNetworkInterfaces ≫ say ∘ [fmtT|getNetworkInterfaces: %w|]
 
@@ -1483,22 +1476,19 @@ myMain opts = flip runReaderT NoMock $ do
                        MonadLog (Log MockIOClass) μ) ⇒ μ [𝕋]
       sess_win_pane = snd ⊳ ꙩ (tmux_path,["display-message"∷𝕋, "-p", "#S:#I.#P"])
 
-  sess_win_pane' ← sess_win_pane
-  lan_wan_ips ← lanWanIPs
-  -- use `git rev-parse --is-inside-work-tree` to see if we're in a git dir
-  git_status ← gitStatus (opts ⊣ dir)
-  let articles ∷ [[𝕋]]
-      articles = [ sess_win_pane'
-                 , [ toText $ hostlocal host ]
-                 , lan_wan_ips
-                 , git_status
-                 ]
+  let getHost ∷ ∀ ε δ μ .
+                (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+                 AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
+                 AsProcOutputParseError ε,AsIOError ε,Printable ε,MonadError ε μ,
+                 MonadLog (Log MockIOClass) μ) ⇒
+                μ [𝕋]
+      getHost = do hostname Informational ⊲ hostlocal ⊲ toText ⊲ pure
 
-  let join_outer :: 𝕋 → [(𝕋,(Colour8,Colour8))] → 𝕋
+  let join_outer :: 𝕋 → [(𝕋,Colour8)] → 𝕋
       join_outer sep vals_cols =
-        let join_two ∷ (Colour8,Colour8) → (Colour8,Colour8) → 𝕋
-            join_two (_fg_,bg_) (_fg_',bg_') = colourFmt sep (bg_,bg_')
-            go ∷ [(𝕋,(Colour8,Colour8))] → 𝕋
+        let join_two ∷ Colour8 → Colour8 → 𝕋
+            join_two bg_ bg_' = colourFmt sep (bg_,bg_')
+            go ∷ [(𝕋,Colour8)] → 𝕋
             go (vc:vc':xs) = go [vc] ◇ join_two (snd vc) (snd vc') ◇ go (vc':xs)
             go [(t,_)] = t
             go [] = ""
@@ -1508,13 +1498,34 @@ myMain opts = flip runReaderT NoMock $ do
       join_thin sep vals (fg_,bg_) =
         colourFmt (T.intercalate (spaces sep) vals) (fg_,bg_)
 
-  let inner_articles ∷ [𝕋] = (\ (a,cs) → join_thin (separator (𝓛()) Thin) a cs) ⊳ zip (spaces ⊳⊳ articles) colours_left'
-  let outer_articles ∷ 𝕋 = join_outer (separator (𝓛()) Bold) (zip (inner_articles◇[""]) (colours_left'◇[(Colour8 234, Colour8 234)]))
+      -- like join_thin, but passes through the bg colour for use in
+      -- join_outer
+      join_thin' ∷ 𝕋 → [𝕋] → (Colour8,Colour8) → (𝕋,Colour8)
+      join_thin' sep vals (fg_,bg_) = (,bg_) $ join_thin sep vals (fg_,bg_)
 
-  say $ [fmtT|inner_articles : %w|] inner_articles
-  say $ [fmtT|outer_articles: %w|] outer_articles
+  let mk_articles ∷ (Monad μ, Traversable ψ) ⇒ α → ((β,γ) → ω) → ψ (α → μ β,γ) → μ (ψ ω)
+      mk_articles d g as = sequence $ (\ (f,x) → g ∘ (,x) ⊳ f d) ⊳ as
+      lefty_stuff ∷ (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+                     AsFPathError ε,MonadError ε μ,MonadLog (Log MockIOClass) μ)⇒
+                    [(AbsDir → μ [𝕋],(Colour8,Colour8))]
+      -- these are tmux' colour numbers, run tmux-colours to see them all
+      lefty_stuff = [ (const sess_win_pane,(Colour8 234    {- black -}, Colour8 148 {- yellow -}))
+                    , (const getHost,(Colour8 255    {- white -}, Colour8  90 {- magenta -}))
+                    , (const lanWanIPs, (Colour8 255    {- white -}, Colour8  24 {- dusky blue -}))
+                    , (gitStatus,(Colour8  88 {- deep red -}, Colour8  29 {- grey blue -}))
+                    ]
+      articles' ∷ (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+                    AsFPathError ε,MonadError ε μ,MonadLog (Log MockIOClass) μ)⇒
+                   μ [(𝕋,Colour8)]
+      articles' = mk_articles (opts ⊣ dir) (uncurry $ join_thin' (separator (𝓛()) Thin)) lefty_stuff -- (zip [const sess_win_pane,const getHost,const lanWanIPs,gitStatus] colours_left)
 
-  tmux_path ‼ ["display-message", "-d", "5000", outer_articles]
+  articles'' ∷ 𝕋 ← join_outer (separator (𝓛()) Bold) ⊳ articles'
+
+--  say $ [fmtT|inner_articles : %w|] inner_articles
+--  say $ [fmtT|outer_articles: %w|] outer_articles
+
+--  tmux_path ‼ ["display-message", "-d", "5000", outer_articles]
+  tmux_path ‼ ["display-message", "-d", "5000", articles'']
   return 0
 
 data BoldThin = Bold | Thin
