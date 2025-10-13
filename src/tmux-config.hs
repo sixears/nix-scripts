@@ -1437,6 +1437,64 @@ gitStatus d = do
 
 ----------------------------------------
 
+-- SessionName:WindowIndex.PaneIndex
+-- WE SHOULD SET THE STATUS TO USE #S, etc., RATHER THAN CALLING THIS
+{- | The current tmux session/window/pane ID, as a [𝕋] to form a tmux status-bar
+     text group -}
+sessionWindowPane ∷ ∀ ε δ μ .
+                    (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+                     AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
+                     AsIOError ε, Printable ε, MonadError ε μ,
+                     MonadLog (Log MockIOClass) μ) ⇒ μ [𝕋]
+sessionWindowPane = snd ⊳ ꙩ (tmux_path,["display-message"∷𝕋, "-p", "#S:#I.#P"])
+
+----------------------------------------
+
+{- | The name of the local host (local part only), as a [𝕋] to form a tmux
+     status-bar text group -}
+getHost ∷ ∀ ε δ μ .
+          (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+           AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
+           AsProcOutputParseError ε,AsIOError ε,Printable ε,MonadError ε μ,
+           MonadLog (Log MockIOClass) μ) ⇒
+          μ [𝕋]
+getHost = do hostname Informational ⊲ hostlocal ⊲ toText ⊲ pure
+
+
+----------------------------------------
+
+data TMuxColour = TMuxCol_Black | TMuxCol_White | TMuxCol_Yellow
+                | TMuxCol_Magenta | TMuxCol_Blue_Dusky | TMuxCol_Red_Deep
+                | TMuxCol_Grey_Green
+  deriving (Eq,Ord)
+
+-- these are tmux' colour numbers, run tmux-colours to see them all
+tmuxColour8 ∷ TMuxColour → Colour8
+tmuxColour8 TMuxCol_Black      = Colour8 234
+tmuxColour8 TMuxCol_Yellow     = Colour8 148
+tmuxColour8 TMuxCol_White      = Colour8 255
+tmuxColour8 TMuxCol_Magenta    = Colour8 90
+tmuxColour8 TMuxCol_Red_Deep   = Colour8 88
+tmuxColour8 TMuxCol_Blue_Dusky = Colour8 24
+tmuxColour8 TMuxCol_Grey_Green = Colour8 29
+
+
+lefty_stuff ∷ ∀ ε δ μ .
+              (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+               AsFPathError ε, AsCreateProcError ε, AsProcOutputParseError ε,
+               AsProcExitError ε, AsParseError ε, AsREParseError ε, AsIOError ε,
+               Printable ε, MonadError ε μ, MonadLog (Log MockIOClass) μ)⇒
+              [(AbsDir → μ [𝕋],(TMuxColour,TMuxColour))]
+
+lefty_stuff = [ (const sessionWindowPane, (TMuxCol_Black,    TMuxCol_Yellow))
+              , (const getHost,           (TMuxCol_White,    TMuxCol_Magenta))
+              , (const lanWanIPs,         (TMuxCol_White,    TMuxCol_Blue_Dusky))
+              , (gitStatus,               (TMuxCol_Red_Deep, TMuxCol_Grey_Green))
+              , (const (return [""]),     (TMuxCol_Black, TMuxCol_Black))
+              ]
+
+----------------------------------------
+
 myMain ∷ ∀ ε . (HasCallStack, AsIOError ε, AsFPathError ε, AsCreateProcError ε,
                 AsProcOutputParseError ε, AsProcExitError ε, AsREParseError ε,
                 AsParseError ε, Printable ε) ⇒
@@ -1467,64 +1525,35 @@ myMain opts = flip runReaderT NoMock $ do
   gcdf ← TMuxStatusGitCommitDiffCount ⊳ gitCommitDiffCount (opts ⊣ dir) "origin/master" "HEAD"
   say $ [fmtT|gcdf: %T|] gcdf
 
-  -- SessionName:WindowIndex.PaneIndex
-  -- WE SHOULD SET THE STATUS TO USE #S, etc., RATHER THAN CALLING THIS
-  let sess_win_pane ∷ ∀ ε δ μ .
-                      (MonadIO μ, HasDoMock δ, MonadReader δ μ,
-                       AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
-                       AsIOError ε, Printable ε, MonadError ε μ,
-                       MonadLog (Log MockIOClass) μ) ⇒ μ [𝕋]
-      sess_win_pane = snd ⊳ ꙩ (tmux_path,["display-message"∷𝕋, "-p", "#S:#I.#P"])
-
-  let getHost ∷ ∀ ε δ μ .
-                (MonadIO μ, HasDoMock δ, MonadReader δ μ,
-                 AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
-                 AsProcOutputParseError ε,AsIOError ε,Printable ε,MonadError ε μ,
-                 MonadLog (Log MockIOClass) μ) ⇒
-                μ [𝕋]
-      getHost = do hostname Informational ⊲ hostlocal ⊲ toText ⊲ pure
-
-  let join_outer :: 𝕋 → [(𝕋,Colour8)] → 𝕋
+  let join_outer :: 𝕋 → [(𝕋,TMuxColour)] → 𝕋
       join_outer sep vals_cols =
-        let join_two ∷ Colour8 → Colour8 → 𝕋
-            join_two bg_ bg_' = colourFmt sep (bg_,bg_')
-            go ∷ [(𝕋,Colour8)] → 𝕋
+        let join_two ∷ TMuxColour → TMuxColour → 𝕋
+            join_two bg_ bg_' = colourFmt sep (tmuxColour8 bg_,tmuxColour8 bg_')
+            go ∷ [(𝕋,TMuxColour)] → 𝕋
             go (vc:vc':xs) = go [vc] ◇ join_two (snd vc) (snd vc') ◇ go (vc':xs)
             go [(t,_)] = t
             go [] = ""
         in go vals_cols
 
-  let join_thin ∷ 𝕋 → [𝕋] → (Colour8,Colour8) → 𝕋
+  let join_thin ∷ 𝕋 → [𝕋] → (TMuxColour,TMuxColour) → 𝕋
       join_thin sep vals (fg_,bg_) =
-        colourFmt (T.intercalate (spaces sep) vals) (fg_,bg_)
+        colourFmt (T.intercalate sep (spaces ⊳ vals))
+                  (tmuxColour8 fg_,tmuxColour8 bg_)
 
       -- like join_thin, but passes through the bg colour for use in
       -- join_outer
-      join_thin' ∷ 𝕋 → [𝕋] → (Colour8,Colour8) → (𝕋,Colour8)
+      join_thin' ∷ 𝕋 → [𝕋] → (TMuxColour,TMuxColour) → (𝕋,TMuxColour)
       join_thin' sep vals (fg_,bg_) = (,bg_) $ join_thin sep vals (fg_,bg_)
 
   let mk_articles ∷ (Monad μ, Traversable ψ) ⇒ α → ((β,γ) → ω) → ψ (α → μ β,γ) → μ (ψ ω)
       mk_articles d g as = sequence $ (\ (f,x) → g ∘ (,x) ⊳ f d) ⊳ as
-      lefty_stuff ∷ (MonadIO μ, HasDoMock δ, MonadReader δ μ,
-                     AsFPathError ε,MonadError ε μ,MonadLog (Log MockIOClass) μ)⇒
-                    [(AbsDir → μ [𝕋],(Colour8,Colour8))]
-      -- these are tmux' colour numbers, run tmux-colours to see them all
-      lefty_stuff = [ (const sess_win_pane,(Colour8 234    {- black -}, Colour8 148 {- yellow -}))
-                    , (const getHost,(Colour8 255    {- white -}, Colour8  90 {- magenta -}))
-                    , (const lanWanIPs, (Colour8 255    {- white -}, Colour8  24 {- dusky blue -}))
-                    , (gitStatus,(Colour8  88 {- deep red -}, Colour8  29 {- grey blue -}))
-                    ]
       articles' ∷ (MonadIO μ, HasDoMock δ, MonadReader δ μ,
                     AsFPathError ε,MonadError ε μ,MonadLog (Log MockIOClass) μ)⇒
-                   μ [(𝕋,Colour8)]
-      articles' = mk_articles (opts ⊣ dir) (uncurry $ join_thin' (separator (𝓛()) Thin)) lefty_stuff -- (zip [const sess_win_pane,const getHost,const lanWanIPs,gitStatus] colours_left)
+                   μ [(𝕋,TMuxColour)]
+      articles' = mk_articles (opts ⊣ dir) (uncurry $ join_thin' (separator (𝓛()) Thin)) lefty_stuff
 
   articles'' ∷ 𝕋 ← join_outer (separator (𝓛()) Bold) ⊳ articles'
 
---  say $ [fmtT|inner_articles : %w|] inner_articles
---  say $ [fmtT|outer_articles: %w|] outer_articles
-
---  tmux_path ‼ ["display-message", "-d", "5000", outer_articles]
   tmux_path ‼ ["display-message", "-d", "5000", articles'']
   return 0
 
