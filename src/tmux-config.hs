@@ -10,6 +10,7 @@
 
 import Base1
 
+import Debug.Trace  ( traceShow )
 import Prelude  ( error, round )
 
 -- base --------------------------------
@@ -1409,31 +1410,52 @@ lanWanIPs = do
 
 ----------------------------------------
 
+gitInWorkTree ∷ ∀ ε δ μ . (MonadIO μ, HasDoMock δ, MonadReader δ μ,
+                           AsFPathError ε, AsREParseError ε, AsCreateProcError ε,
+                           AsProcExitError ε, AsIOError ε,
+                           Printable ε, MonadError ε μ,
+                           MonadLog (Log MockIOClass) μ) ⇒
+                AbsDir → μ (𝔼 𝕋 ())
+gitInWorkTree d =
+  ѥ @ScriptError (git d ["rev-parse", "--is-inside-work-tree"]) ≫ \ case
+    𝓛 e → return (𝓛 $ toText e)
+    𝓡 _ → return (𝓡 ())
+
 gitStatus ∷ ∀ ε δ μ . (MonadIO μ, HasDoMock δ, MonadReader δ μ,
                        AsFPathError ε, AsREParseError ε, AsCreateProcError ε,
-                       AsProcExitError ε,AsIOError ε,Printable ε,MonadError ε μ,
+                       AsProcExitError ε, AsProcOutputParseError ε, AsIOError ε,
+                       Printable ε,MonadError ε μ,
                        MonadLog (Log MockIOClass) μ) ⇒
             AbsDir → μ [𝕋]
 gitStatus d = do
-  -- use `git rev-parse --is-inside-work-tree` to see if we're in a git dir
-  remote_origin_base ← gitRemoteOriginBase d
-  head_ref_base ← gitSymbolicRefHeadBase d
-  (tagname,tagchanges,_) ← ѥ @ScriptError (gitTagState d) ≫ \ case
-                             𝓛 _  → return ("","","")
-                             𝓡 xs → return xs
+  in_work_tree ← traceShow "bart" $ gitInWorkTree d
 
-  stw ← ѥ @ScriptError (TMuxStatusGitChangedFilesStats ⊳ gitChangedFilesStats d) ≫ \ case
-            𝓛 e → return $ T.take 8 $ toText e
-            𝓡 cfs → return $ toText cfs
+  case traceShow "lisa" $ in_work_tree of
+    𝓛 _ → traceShow "marge" $ return []
+    𝓡 _ → traceShow "homer" $ do
+      gcdf ← TMuxStatusGitCommitDiffCount ⊳ gitCommitDiffCount d "origin/master" "HEAD"
 
-  return [ remote_origin_base
-         , head_ref_base
-         , ю [ if tagchanges≡"0"
-               then "✓" ◇ tagname
-               else tagname ◇ "+" ◇ tagchanges
-             , case stw of "" → ""; _ → " «" ◇ stw ◇ "»"
+      remote_origin_base ← gitRemoteOriginBase d
+      head_ref_base ← gitSymbolicRefHeadBase d
+      return ()
+      (tagname,tagchanges,_) ← ѥ @ScriptError (gitTagState d) ≫ \ case
+                                 𝓛 _  → return ("","","")
+                                 𝓡 xs → return xs
+
+
+      stw ← ѥ @ScriptError (TMuxStatusGitChangedFilesStats ⊳ gitChangedFilesStats d) ≫ \ case
+                𝓛 e → return $ T.take 8 $ toText e
+                𝓡 cfs → return $ toText cfs
+
+      return [ remote_origin_base
+             , head_ref_base
+             , ю [ if tagchanges≡"0"
+                   then "✓" ◇ tagname
+                   else tagname ◇ "+" ◇ tagchanges
+                 , case stw of "" → ""; _ → " «" ◇ stw ◇ "»"
+                 ]
+             , toText gcdf
              ]
-         ]
 
 ----------------------------------------
 
@@ -1522,9 +1544,6 @@ myMain opts = flip runReaderT NoMock $ do
   -- encapsulate into a function
 
   -- XXX USE THIS
-  gcdf ← TMuxStatusGitCommitDiffCount ⊳ gitCommitDiffCount (opts ⊣ dir) "origin/master" "HEAD"
-  say $ [fmtT|gcdf: %T|] gcdf
-
   let join_outer :: LeftRight → [(𝕋,TMuxColour)] → 𝕋
       join_outer lr vals_cols =
         let join_two ∷ TMuxColour → TMuxColour → 𝕋
