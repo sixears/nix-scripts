@@ -1,17 +1,42 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE UnicodeSyntax     #-}
 
-import Network.Socket
-import qualified Data.ByteString as B
-import qualified Data.ByteString.Char8 as C
-import Control.Concurrent
-import Control.Concurrent.MVar
-import Control.Monad
-import Data.Time
-import System.IO
+
+import Base1
+
+
+-- base --------------------------------
+
+import Control.Concurrent       ( forkIO, threadDelay )
+import Control.Concurrent.MVar  ( MVar, readMVar, modifyMVar_, newMVar )
+import Control.Monad            ( forever )
+import System.IO                ( BufferMode( NoBuffering ),
+                                  IOMode( ReadWriteMode ),
+                                  hClose, hSetBuffering
+                                )
+
+-- bytestring --------------------------
+
+-- import Data.ByteString        qualified as  B
+import Data.ByteString.Char8  qualified as  C
+
+-- containers --------------------------
 
 import qualified Data.Map.Strict as Map
 
-type Cache = Map.Map String String
+-- network -----------------------------
+
+import Network.Socket ( Family( AF_INET ), SockAddr( SockAddrInet ), Socket
+                      , SocketType( Stream )
+                      , accept, bind, listen, socket, socketToHandle )
+
+-- time --------------------------------
+
+import Data.Time ( getCurrentTime )
+
+--------------------------------------------------------------------------------
+
+type Cache = Map.Map 𝕊 𝕊
 
 main :: IO ()
 main = do
@@ -61,3 +86,5 @@ handleClient sock cacheVar = do
                         Nothing  -> "Unknown command"
     C.hPutStrLn handle (C.pack response)
     hClose handle
+
+-- that's all, folks! ----------------------------------------------------------
