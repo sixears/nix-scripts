@@ -1525,52 +1525,56 @@ myMain opts = flip runReaderT NoMock $ do
   gcdf ← TMuxStatusGitCommitDiffCount ⊳ gitCommitDiffCount (opts ⊣ dir) "origin/master" "HEAD"
   say $ [fmtT|gcdf: %T|] gcdf
 
-  let join_outer :: 𝕋 → [(𝕋,TMuxColour)] → 𝕋
-      join_outer sep vals_cols =
+  let join_outer :: LeftRight → [(𝕋,TMuxColour)] → 𝕋
+      join_outer lr vals_cols =
         let join_two ∷ TMuxColour → TMuxColour → 𝕋
-            join_two bg_ bg_' = colourFmt sep (tmuxColour8 bg_,tmuxColour8 bg_')
+            join_two bg_ bg_' = colourFmt (separator Bold lr) (tmuxColour8 bg_,tmuxColour8 bg_')
             go ∷ [(𝕋,TMuxColour)] → 𝕋
             go (vc:vc':xs) = go [vc] ◇ join_two (snd vc) (snd vc') ◇ go (vc':xs)
             go [(t,_)] = t
             go [] = ""
         in go vals_cols
 
-  let join_thin ∷ 𝕋 → [𝕋] → (TMuxColour,TMuxColour) → 𝕋
-      join_thin sep vals (fg_,bg_) =
-        colourFmt (T.intercalate sep (spaces ⊳ vals))
+  let join_thin ∷ LeftRight → [𝕋] → (TMuxColour,TMuxColour) → 𝕋
+      join_thin lr vals (fg_,bg_) =
+        colourFmt (T.intercalate (separator Thin lr) (spaces ⊳ vals))
                   (tmuxColour8 fg_,tmuxColour8 bg_)
 
       -- like join_thin, but passes through the bg colour for use in
       -- join_outer
-      join_thin' ∷ 𝕋 → [𝕋] → (TMuxColour,TMuxColour) → (𝕋,TMuxColour)
-      join_thin' sep vals (fg_,bg_) = (,bg_) $ join_thin sep vals (fg_,bg_)
+      join_thin' ∷ LeftRight → [𝕋] → (TMuxColour,TMuxColour) → (𝕋,TMuxColour)
+      join_thin' lr vals (fg_,bg_) = (,bg_) $ join_thin lr vals (fg_,bg_)
 
-  let mk_articles ∷ (Monad μ, Traversable ψ) ⇒ α → ((β,γ) → ω) → ψ (α → μ β,γ) → μ (ψ ω)
+  let mk_articles ∷ (Monad μ, Traversable ψ) ⇒
+                    α → ((β,γ) → ω) → ψ (α → μ β,γ) → μ (ψ ω)
       mk_articles d g as = sequence $ (\ (f,x) → g ∘ (,x) ⊳ f d) ⊳ as
       articles' ∷ (MonadIO μ, HasDoMock δ, MonadReader δ μ,
-                    AsFPathError ε,MonadError ε μ,MonadLog (Log MockIOClass) μ)⇒
+                   AsFPathError ε,MonadError ε μ,MonadLog (Log MockIOClass) μ) ⇒
                    μ [(𝕋,TMuxColour)]
-      articles' = mk_articles (opts ⊣ dir) (uncurry $ join_thin' (separator (𝓛()) Thin)) lefty_stuff
+      articles' = mk_articles (opts ⊣ dir)
+                              (uncurry $ join_thin' Left_)
+                              lefty_stuff
 
-  articles'' ∷ 𝕋 ← join_outer (separator (𝓛()) Bold) ⊳ articles'
+  articles'' ∷ 𝕋 ← join_outer Left_ ⊳ articles'
 
   tmux_path ‼ ["display-message", "-d", "5000", articles'']
   return 0
 
+data LeftRight = Left_ | Right_
 data BoldThin = Bold | Thin
 data PatchedFontInUse = PatchedFontInUse | NoPatchedFontInUse
 
-separator' ∷ PatchedFontInUse → 𝔼 () () → BoldThin → 𝕋
-separator' PatchedFontInUse (𝓡 ()) Bold = "\xe0b2" -- 
-separator' PatchedFontInUse (𝓛 ()) Bold = "\xe0b0" -- 
-separator' PatchedFontInUse (𝓡 ()) Thin = "\xe0b3" -- 
-separator' PatchedFontInUse (𝓛 ()) Thin = "\xe0b1" -- 
-separator' NoPatchedFontInUse (𝓡 ()) Bold = "\x25c0" -- ◀
-separator' NoPatchedFontInUse (𝓛 ()) Bold = "\x25b6" -- ▶
-separator' NoPatchedFontInUse (𝓡 ()) Thin = "\x276e" -- ❮
-separator' NoPatchedFontInUse (𝓛 ()) Thin = "\x276f" -- ❯
+separator' ∷ PatchedFontInUse → BoldThin → LeftRight → 𝕋
+separator' PatchedFontInUse Bold Right_ = "\xe0b2" -- 
+separator' PatchedFontInUse Bold Left_ = "\xe0b0" -- 
+separator' PatchedFontInUse Thin Right_ = "\xe0b3" -- 
+separator' PatchedFontInUse Thin Left_ = "\xe0b1" -- 
+separator' NoPatchedFontInUse Bold Right_ = "\x25c0" -- ◀
+separator' NoPatchedFontInUse Bold Left_ = "\x25b6" -- ▶
+separator' NoPatchedFontInUse Thin Right_ = "\x276e" -- ❮
+separator' NoPatchedFontInUse Thin Left_ = "\x276f" -- ❯
 
-separator ∷ 𝔼 () () → BoldThin → 𝕋
+separator ∷ BoldThin → LeftRight → 𝕋
 separator = separator' PatchedFontInUse
 
 main ∷ IO ()
