@@ -1058,7 +1058,8 @@ lanIPs = liftIO $ LanIPs ⊳
 
 ----------------------------------------
 
--- 𝓝 is returned in case of timeout
+{-| Issue an HTTP request, with a given timeout.  If no response is received
+    within the time allowed, 𝓝 is returned -}
 httpReq ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ, HasCallStack) ⇒
           𝕊 → Duration → μ (𝕄 𝕋)
 httpReq url timeoutμs =
@@ -1076,13 +1077,13 @@ httpReq url timeoutμs =
   in  join ∘ liftIO ∘ catcher ∘ ѥ ∘ asIOError $ do
         manager ← newManager tlsManagerSettings
         request ← parseRequest url
---        timeout (fromIntegral timeoutμs) $ do
         timeout (round $ timeoutμs ⊣ asMicroseconds) $ do
           response ← httpLbs request manager
           return ∘ decodeUtf8 ∘ LBS.toStrict $ responseBody response
 
 --------------------
 
+{-| see `httReq`; but then attempt to parse the returned text -}
 httpRequest ∷ ∀ ε α μ .
               (MonadIO μ, AsParseError ε, AsIOError ε, MonadError ε μ,
                Parsecable α) ⇒
