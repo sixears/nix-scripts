@@ -15,20 +15,24 @@ import System.IO                ( BufferMode( NoBuffering ),
                                   hClose, hSetBuffering
                                 )
 
--- bytestring --------------------------
-
--- import Data.ByteString        qualified as  B
-import Data.ByteString.Char8  qualified as  C
-
 -- containers --------------------------
 
 import qualified Data.Map.Strict as Map
 
+-- duration ----------------------------
+
+import Duration  ( Duration( SECS ), asMicroseconds )
+
 -- network -----------------------------
 
-import Network.Socket ( Family( AF_INET ), SockAddr( SockAddrInet ), Socket
-                      , SocketType( Stream )
+import Network.Socket ( Family( AF_INET ), PortNumber, SockAddr( SockAddrInet )
+                      , Socket, SocketType( Stream )
                       , accept, bind, listen, socket, socketToHandle )
+
+-- text --------------------------------
+
+import Data.Text     qualified as  T
+import Data.Text.IO  qualified as  T_IO
 
 -- time --------------------------------
 
@@ -36,55 +40,63 @@ import Data.Time ( getCurrentTime )
 
 --------------------------------------------------------------------------------
 
-type Cache = Map.Map 𝕊 𝕊
+type Cache = Map.Map 𝕋 𝕋
+
+------------------------------------------------------------
+
+sleep ∷ MonadIO μ ⇒ Duration → μ ()
+sleep dur = liftIO $ threadDelay (round $ dur ⊣ asMicroseconds)
+
+----------------------------------------
+
+-- Function to update cache every 10 seconds
+cacheUpdater :: MVar Cache → IO ()
+cacheUpdater cache_var = forever $ do
+    -- Simulate cache population
+    currentTime ← getCurrentTime
+    let newCache = Map.fromList [ ("timestamp", T.pack $ show currentTime)
+                                , ("message", "Hello from cache!")]
+    modifyMVar_ cache_var (\ _ → return newCache)
+    sleep (10 SECS)
+
+----------------------------------------
+
+-- Function to handle client requests
+handleClient :: Socket → MVar Cache → IO ()
+handleClient sock cache_var = do
+    -- We use Handle for easier IO
+    handle ← socketToHandle sock ReadWriteMode
+    hSetBuffering handle NoBuffering
+    -- Read command
+    command ← T_IO.hGetLine handle
+    -- Get cache and respond
+    cache ← readMVar cache_var
+    let response = case Map.lookup command cache of
+                        𝓙 val → val
+                        𝓝     → "Unknown command"
+    T_IO.hPutStrLn handle response
+    hClose handle
+
+----------------------------------------
 
 main :: IO ()
 main = do
     -- Create a socket
-    sock <- socket AF_INET Stream 0
-    let port = 3000
-    bind sock (SockAddrInet (fromIntegral port) 0)
+    sock ← socket AF_INET Stream 0
+    let port ∷ PortNumber = fromIntegral (3000∷ℕ)
+    bind sock (SockAddrInet port 0)
     listen sock 5
-    putStrLn $ "Server listening on port " ++ show port
 
     -- Initialize cache
-    cacheVar <- newMVar Map.empty
+    cache_var ← newMVar Map.empty
 
     -- Start cache updater thread
-    _ <- forkIO (cacheUpdater cacheVar)
+    _ ← forkIO (cacheUpdater cache_var)
 
     -- Accept connections loop
     forever $ do
-        (conn, addr) <- accept sock
-        putStrLn $ "Accepted connection from " ++ show addr
+        (conn, addr) ← accept sock
         -- Handle each connection in a separate thread
-        forkIO $ handleClient conn cacheVar
-
--- Function to update cache every 10 seconds
-cacheUpdater :: MVar Cache -> IO ()
-cacheUpdater cacheVar = forever $ do
-    -- Simulate cache population
-    currentTime <- getCurrentTime
-    let newCache = Map.fromList [("timestamp", show currentTime), ("message", "Hello from cache!")]
-    modifyMVar_ cacheVar (\_ -> return newCache)
-    putStrLn "Cache updated."
-    threadDelay (10 * 1000000) -- 10 seconds
-
--- Function to handle client requests
-handleClient :: Socket -> MVar Cache -> IO ()
-handleClient sock cacheVar = do
-    -- We use Handle for easier IO
-    handle <- socketToHandle sock ReadWriteMode
-    hSetBuffering handle NoBuffering
-    -- Read command
-    command <- C.hGetLine handle
-    putStrLn $ "Received command: " ++ C.unpack command
-    -- Get cache and respond
-    cache <- readMVar cacheVar
-    let response = case Map.lookup (C.unpack command) cache of
-                        Just val -> val
-                        Nothing  -> "Unknown command"
-    C.hPutStrLn handle (C.pack response)
-    hClose handle
+        forkIO $ handleClient conn cache_var
 
 -- that's all, folks! ----------------------------------------------------------
