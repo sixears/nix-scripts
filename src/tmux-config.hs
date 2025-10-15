@@ -49,7 +49,7 @@ import FPath.RelFile           ( RelFile )
 
 -- http-plus ---------------------------
 
-import HTTPPlus ( httpReq )
+import HTTPPlus ( httpRequest )
 
 -- ip4 ---------------------------------
 
@@ -114,7 +114,7 @@ import Options.Applicative.Types  ( Parser, ReadM )
 
 -- parsec-plus -------------------------
 
-import ParsecPlus  ( AsParseError, Parsecable, parsec )
+import ParsecPlus  ( AsParseError )
 
 -- pcre --------------------------------
 
@@ -1033,27 +1033,12 @@ lanIPs = liftIO $ LanIPs ⊳
            {- exclude lo                    -} , NI.name ni ≠ "lo"
            {- exclude unassigned interfaces -} , NI.ipv4 ni ≠ NI.IPv4 0 ])
 
---------------------
-
-{-| see `httReq`; but then attempt to parse the returned text -}
-httpRequest ∷ ∀ ε α μ .
-              (MonadIO μ, AsParseError ε, AsIOError ε, MonadError ε μ,
-               Parsecable α) ⇒
-              𝕋 → Duration → μ (𝕄 α)
-httpRequest url timeout_ = do
-  html ← httpReq timeout_  url
-  case html of
-    𝓝 → return 𝓝
-    𝓙 t → case parsec t t of
-            𝓛 e → join $ throwError e
-            𝓡 r → return $ 𝓙 r
-
 ----------------------------------------
 
 wanIP ∷ MonadIO μ ⇒ μ 𝕋
 wanIP =
   let url     = "http://whatismyip.akamai.com"
-  in  ѥ (httpRequest @ScriptError @IP4 url (SECS 2)) ⊲ \ case
+  in  ѥ (httpRequest @ScriptError @IP4 (SECS 2) url) ⊲ \ case
         𝓛 _e    → "-ERR- " -- ◇ T.take 8 (toText e)
         𝓡 (𝓙 r) → toText r
         𝓡 𝓝     → "NONE"
