@@ -10,28 +10,20 @@
 
 import Base1
 
-import Debug.Trace  ( traceShow )
-import Prelude  ( error, round )
+-- import Debug.Trace  ( traceShow )
+import Prelude  ( error )
 
 -- base --------------------------------
 
-import Control.Exception   ( Handler( Handler ), SomeException
-                           , catches, displayException )
-import Data.Char           ( isAlphaNum, isAscii, isControl )
-import Data.List           ( intercalate, reverse, sortOn, take
-                           , takeWhile, zip )
+import Data.Char           ( isAlphaNum )
+import Data.List           ( intercalate, reverse, sortOn, zip )
 import Data.Maybe          ( catMaybes )
 import Data.Tuple          ( uncurry )
-import System.Timeout      ( timeout )
 import Text.Read           ( readEither )
 
 -- base-unicode-symbols ----------------
 
 import Prelude.Unicode  ( (≠) )
-
--- bytestring --------------------------
-
-import Data.ByteString.Lazy  qualified as LBS
 
 -- domainnames -------------------------
 
@@ -39,7 +31,7 @@ import DomainNames.Hostname  ( hostlocal )
 
 -- duration ----------------------------
 
-import Duration  ( Duration( SECS ), asMicroseconds )
+import Duration  ( Duration( SECS ) )
 
 -- exceptions --------------------------
 
@@ -55,13 +47,9 @@ import FPath.Error.FPathError  ( AsFPathError, FPathError )
 import FPath.Parseable         ( Parseable, parseDir )
 import FPath.RelFile           ( RelFile )
 
--- http-client -------------------------
+-- http-plus ---------------------------
 
-import Network.HTTP.Client          ( httpLbs, newManager, parseRequest
-                                    , responseBody )
-import Network.HTTP.Client.Internal ( HttpException( HttpExceptionRequest
-                                                   , InvalidUrlException ) )
-import Network.HTTP.Client.TLS      ( tlsManagerSettings )
+import HTTPPlus ( httpReq )
 
 -- ip4 ---------------------------------
 
@@ -93,10 +81,6 @@ import MockIO.DoMock       ( DoMock( NoMock ), HasDoMock )
 
 import MockIO.Process            ( ꙩ )
 import MockIO.Process.MLCmdSpec  ( MLCmdSpec, ToMLCmdSpec )
-
--- monaderror-io -----------------------
-
-import MonadError.IO.Error  ( throwUserError )
 
 -- monadio-plus ------------------------
 
@@ -162,8 +146,6 @@ import TastyPlus  ( runTestsP, runTestsReplay, runTestTree )
 -- text --------------------------------
 
 import Data.Text  qualified as  T
-
-import Data.Text.Encoding  ( decodeUtf8 )
 
 -- text-printer ------------------------
 
@@ -1042,11 +1024,6 @@ instance ToTextss [TMuxConfig] where
 
 ----------------------------------------
 
-isSimpleAscii ∷ ℂ → 𝔹
-isSimpleAscii c = isAscii c ∧ ﬧ  (isControl c)
-
-------------------------------------------------------------
-
 newtype LanIPs = LanIPs { unLanIPs ∷ [NI.IPv4] }
   deriving Show
 
@@ -1056,40 +1033,15 @@ lanIPs = liftIO $ LanIPs ⊳
            {- exclude lo                    -} , NI.name ni ≠ "lo"
            {- exclude unassigned interfaces -} , NI.ipv4 ni ≠ NI.IPv4 0 ])
 
-----------------------------------------
-
-{-| Issue an HTTP request, with a given timeout.  If no response is received
-    within the time allowed, 𝓝 is returned -}
-httpReq ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ, HasCallStack) ⇒
-          𝕊 → Duration → μ (𝕄 𝕋)
-httpReq url timeoutμs =
-  let catcher io =
-        let some_ex_h (e∷SomeException) =
-              let take_take      = take 20 ∘ takeWhile isSimpleAscii
-              in  ѥ (throwUserError ∘ take_take $ displayException e)
-
-            http_ex_h (e∷HttpException) =
-              case e of
-                HttpExceptionRequest _ ex → return $ throwUserError $ show ex
-                InvalidUrlException _ ex  → return $ throwUserError ex
-
-        in  catches io [ Handler http_ex_h, Handler some_ex_h ]
-  in  join ∘ liftIO ∘ catcher ∘ ѥ ∘ asIOError $ do
-        manager ← newManager tlsManagerSettings
-        request ← parseRequest url
-        timeout (round $ timeoutμs ⊣ asMicroseconds) $ do
-          response ← httpLbs request manager
-          return ∘ decodeUtf8 ∘ LBS.toStrict $ responseBody response
-
 --------------------
 
 {-| see `httReq`; but then attempt to parse the returned text -}
 httpRequest ∷ ∀ ε α μ .
               (MonadIO μ, AsParseError ε, AsIOError ε, MonadError ε μ,
                Parsecable α) ⇒
-              𝕊 → Duration → μ (𝕄 α)
-httpRequest url timeoutμs = do
-  html ← httpReq url timeoutμs
+              𝕋 → Duration → μ (𝕄 α)
+httpRequest url timeout_ = do
+  html ← httpReq timeout_  url
   case html of
     𝓝 → return 𝓝
     𝓙 t → case parsec t t of
@@ -1429,11 +1381,11 @@ gitStatus ∷ ∀ ε δ μ . (MonadIO μ, HasDoMock δ, MonadReader δ μ,
                        MonadLog (Log MockIOClass) μ) ⇒
             AbsDir → μ [𝕋]
 gitStatus d = do
-  in_work_tree ← traceShow "bart" $ gitInWorkTree d
+  in_work_tree ← gitInWorkTree d
 
-  case traceShow "lisa" $ in_work_tree of
-    𝓛 _ → traceShow "marge" $ return []
-    𝓡 _ → traceShow "homer" $ do
+  case in_work_tree of
+    𝓛 _ → return []
+    𝓡 _ → do
       gcdf ← TMuxStatusGitCommitDiffCount ⊳ gitCommitDiffCount d "origin/master" "HEAD"
 
       remote_origin_base ← gitRemoteOriginBase d
