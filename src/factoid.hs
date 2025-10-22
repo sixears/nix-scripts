@@ -1,19 +1,33 @@
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE UnicodeSyntax     #-}
 
-
 import Base1
 
+-- aeson -------------------------------
+
+import Data.Aeson  ( encode )
+
+-- async -------------------------------
+
+import Control.Concurrent.Async  ( Async, async, poll )
 
 -- base --------------------------------
 
 import Control.Concurrent       ( forkIO, threadDelay )
 import Control.Concurrent.MVar  ( MVar, readMVar, modifyMVar_, newMVar )
 import Control.Monad            ( forever )
+import Data.String              ( fromString )
 import System.IO                ( BufferMode( NoBuffering ),
                                   IOMode( ReadWriteMode ),
-                                  hClose, hSetBuffering
+                                  hClose, hGetLine, hSetBuffering
                                 )
+import System.Process           ( CreateProcess( std_out ), StdStream( CreatePipe ),
+                                  createProcess, proc )
+
+-- bytestring --------------------------
+
+import Data.ByteString.Lazy  qualified as  LBS
 
 -- containers --------------------------
 
@@ -23,11 +37,17 @@ import qualified Data.Map.Strict as Map
 
 import Duration  ( Duration( SECS ), asMicroseconds )
 
+-- more-unicode ------------------------
+
+import Data.MoreUnicode.Lens  ( (⊩) )
+
 -- network -----------------------------
 
 import Network.Socket ( Family( AF_INET ), PortNumber, SockAddr( SockAddrInet )
                       , Socket, SocketType( Stream )
                       , accept, bind, listen, socket, socketToHandle )
+
+import NetworkPlus  ( lanIPs )
 
 -- text --------------------------------
 
@@ -40,7 +60,12 @@ import Data.Time ( getCurrentTime )
 
 --------------------------------------------------------------------------------
 
-type Cache = Map.Map 𝕋 𝕋
+type Cache = Map.Map LBS.ByteString LBS.ByteString
+
+newtype Context = Context { _lanCheck ∷ 𝕄 (Async ()) }
+
+lanCheck ∷ Lens' Context (𝕄 (Async()))
+lanCheck = lens _lanCheck (\ c l → c { _lanCheck = l })
 
 ------------------------------------------------------------
 
@@ -49,54 +74,97 @@ sleep dur = liftIO $ threadDelay (round $ dur ⊣ asMicroseconds)
 
 ----------------------------------------
 
+mkTimer ∷ Duration → IO α → IO (Async α)
+mkTimer duration action = do
+  putStrLn "mkTimer"
+  async $ sleep duration ⪼ action
+
+----------------------------------------
+
 -- Function to update cache every 10 seconds
-cacheUpdater :: MVar Cache → IO ()
-cacheUpdater cache_var = forever $ do
+cacheUpdater ∷ MVar Cache → IO ()
+cacheUpdater cache = forever $ do
     -- Simulate cache population
     currentTime ← getCurrentTime
-    let newCache = Map.fromList [ ("timestamp", T.pack $ show currentTime)
+    lan_ips ← lanIPs
+    let newCache = Map.fromList [ ("timestamp", fromString $ show currentTime)
+                                , ("lanIPs", encode lan_ips)
                                 , ("message", "Hello from cache!")]
-    modifyMVar_ cache_var (\ _ → return newCache)
-    sleep (10 SECS)
+    modifyMVar_ cache (\ _ → return newCache)
+    sleep (SECS 10)
+
+----------------------------------------
+
+lanWatcher ∷ MVar Context → MVar Cache → IO ()
+lanWatcher context cache = do
+  -- CR martyn: path
+  (_,𝓙 ip_monitor,_,_) ← createProcess ((proc "/run/current-system/sw/bin/ip"
+                      [ "-tshort", "monitor", "address" ]) { std_out = CreatePipe })
+  forever $ do
+    l ← hGetLine ip_monitor
+--    t ← mkTimer (SECS 1) (return ())
+    modifyMVar_ context $ \ c → do
+      let currentLanCheck = c ⊣ lanCheck
+      case currentLanCheck of
+        𝓙 c' →
+          poll c' ≫ \ case
+            𝓙 _ → do
+              t ← mkTimer (SECS 1) (return ())
+              return $ c & lanCheck ⊩ t -- timer has ended
+            𝓝   → return c  -- Timer already exists, do nothing
+        𝓝 → do
+          t ← mkTimer (SECS 1) (return ())
+          -- set a new timer
+          return $ c & lanCheck ⊩ t
+{-
+    modifyMVar_ context (\ c →
+                            return $ c & lanCheck ⊧ (\ case 𝓙 t → 𝓙 t; 𝓝 → 𝓙 t)
+                        )
+-}
+    putStrLn $ "ip monitor: " ◇ l
+  return ()
 
 ----------------------------------------
 
 -- Function to handle client requests
-handleClient :: Socket → MVar Cache → IO ()
-handleClient sock cache_var = do
+handleClient ∷ Socket → MVar Cache → IO ()
+handleClient sock cache = do
     -- We use Handle for easier IO
     handle ← socketToHandle sock ReadWriteMode
     hSetBuffering handle NoBuffering
     -- Read command
-    command ← T_IO.hGetLine handle
+    command ← fromString ⊳ hGetLine handle
     -- Get cache and respond
-    cache ← readMVar cache_var
+    cache ← readMVar cache
     let response = case Map.lookup command cache of
                         𝓙 val → val
                         𝓝     → "Unknown command"
-    T_IO.hPutStrLn handle response
+    LBS.hPutStr handle (response ◇ "\n")
     hClose handle
 
 ----------------------------------------
 
-main :: IO ()
+main ∷ IO ()
 main = do
-    -- Create a socket
-    sock ← socket AF_INET Stream 0
-    let port ∷ PortNumber = fromIntegral (3000∷ℕ)
-    bind sock (SockAddrInet port 0)
-    listen sock 5
+  -- Create a socket
+  sock ← socket AF_INET Stream 0
+  let port ∷ PortNumber = fromIntegral (3000∷ℕ)
+  bind sock (SockAddrInet port 0)
+  listen sock 5
 
-    -- Initialize cache
-    cache_var ← newMVar Map.empty
+  -- Initialize cache & context
+  cache   ← newMVar Map.empty
+  context ← newMVar (Context { _lanCheck = 𝓝 })
 
-    -- Start cache updater thread
-    _ ← forkIO (cacheUpdater cache_var)
+  -- Start cache updater thread
+  _ ← forkIO (cacheUpdater cache)
 
-    -- Accept connections loop
-    forever $ do
-        (conn, addr) ← accept sock
-        -- Handle each connection in a separate thread
-        forkIO $ handleClient conn cache_var
+  _ ← forkIO (lanWatcher context cache)
+
+  -- Accept connections loop
+  forever $ do
+      (conn, addr) ← accept sock
+      -- Handle each connection in a separate thread
+      forkIO $ handleClient conn cache
 
 -- that's all, folks! ----------------------------------------------------------
