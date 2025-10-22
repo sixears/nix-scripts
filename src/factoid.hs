@@ -62,10 +62,21 @@ import Data.Time ( getCurrentTime )
 
 type Cache = Map.Map LBS.ByteString LBS.ByteString
 
-newtype Context = Context { _lanCheck ∷ 𝕄 (Async ()) }
+------------------------------------------------------------
+
+data Context = Context { _cache ∷ MVar Cache
+                       , _lanCheck ∷ 𝕄 (Async ()) }
 
 lanCheck ∷ Lens' Context (𝕄 (Async()))
 lanCheck = lens _lanCheck (\ c l → c { _lanCheck = l })
+
+newLanCheck ∷ Context → IO Context
+newLanCheck c = do
+  t ← mkTimer (SECS 1) (do lan_ips ← lanIPs
+                           putStrLn "checking..."
+                           modifyMVar_ (_cache c) (return ∘ Map.insert "lanIPs" (encode lan_ips))
+                           )
+  return $ c & lanCheck ⊩ t
 
 ------------------------------------------------------------
 
@@ -102,25 +113,14 @@ lanWatcher context cache = do
                       [ "-tshort", "monitor", "address" ]) { std_out = CreatePipe })
   forever $ do
     l ← hGetLine ip_monitor
---    t ← mkTimer (SECS 1) (return ())
     modifyMVar_ context $ \ c → do
       let currentLanCheck = c ⊣ lanCheck
       case currentLanCheck of
         𝓙 c' →
           poll c' ≫ \ case
-            𝓙 _ → do
-              t ← mkTimer (SECS 1) (return ())
-              return $ c & lanCheck ⊩ t -- timer has ended
+            𝓙 _ → newLanCheck c  -- timer has ended
             𝓝   → return c  -- Timer already exists, do nothing
-        𝓝 → do
-          t ← mkTimer (SECS 1) (return ())
-          -- set a new timer
-          return $ c & lanCheck ⊩ t
-{-
-    modifyMVar_ context (\ c →
-                            return $ c & lanCheck ⊧ (\ case 𝓙 t → 𝓙 t; 𝓝 → 𝓙 t)
-                        )
--}
+        𝓝 → newLanCheck c -- set a new timer
     putStrLn $ "ip monitor: " ◇ l
   return ()
 
@@ -154,7 +154,7 @@ main = do
 
   -- Initialize cache & context
   cache   ← newMVar Map.empty
-  context ← newMVar (Context { _lanCheck = 𝓝 })
+  context ← newMVar (Context { _lanCheck = 𝓝, _cache = cache })
 
   -- Start cache updater thread
   _ ← forkIO (cacheUpdater cache)
