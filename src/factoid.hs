@@ -17,6 +17,7 @@ import Control.Concurrent.Async  ( Async, async, poll )
 import Control.Concurrent       ( forkIO, threadDelay )
 import Control.Concurrent.MVar  ( MVar, readMVar, modifyMVar_, newMVar )
 import Control.Monad            ( forever )
+import Data.Maybe               ( fromJust )
 import Data.String              ( fromString )
 import System.IO                ( BufferMode( NoBuffering ),
                                   IOMode( ReadWriteMode ),
@@ -36,6 +37,10 @@ import qualified Data.Map.Strict as Map
 -- duration ----------------------------
 
 import Duration  ( Duration( SECS ), asMicroseconds )
+
+-- ip4 ---------------------------------
+
+import IP4  ( IP4 )
 
 -- more-unicode ------------------------
 
@@ -60,7 +65,13 @@ import Data.Time ( getCurrentTime )
 
 --------------------------------------------------------------------------------
 
-type Cache = Map.Map LBS.ByteString LBS.ByteString
+newtype Cache = -- Map.Map LBS.ByteString LBS.ByteString
+             Cache { _lanIPs ∷ [IP4] }
+
+cacheResponse ∷ Cache → LBS.ByteString → LBS.ByteString
+
+cacheResponse c "lanIPs" = encode (_lanIPs c)
+cacheResponse c _ = "Unknown request"
 
 ------------------------------------------------------------
 
@@ -73,8 +84,7 @@ lanCheck = lens _lanCheck (\ c l → c { _lanCheck = l })
 newLanCheck ∷ Context → IO Context
 newLanCheck c = do
   t ← mkTimer (SECS 1) (do lan_ips ← lanIPs
-                           putStrLn "checking..."
-                           modifyMVar_ (_cache c) (return ∘ Map.insert "lanIPs" (encode lan_ips))
+                           modifyMVar_ (_cache c) (\ c' → return $ c' { _lanIPs = lan_ips })
                            )
   return $ c & lanCheck ⊩ t
 
@@ -97,11 +107,6 @@ cacheUpdater ∷ MVar Cache → IO ()
 cacheUpdater cache = forever $ do
     -- Simulate cache population
     currentTime ← getCurrentTime
-    lan_ips ← lanIPs
-    let newCache = Map.fromList [ ("timestamp", fromString $ show currentTime)
-                                , ("lanIPs", encode lan_ips)
-                                , ("message", "Hello from cache!")]
-    modifyMVar_ cache (\ _ → return newCache)
     sleep (SECS 10)
 
 ----------------------------------------
@@ -136,9 +141,10 @@ handleClient sock cache = do
     command ← fromString ⊳ hGetLine handle
     -- Get cache and respond
     cache ← readMVar cache
-    let response = case Map.lookup command cache of
+    let response = {- case Map.lookup command cache of
                         𝓙 val → val
-                        𝓝     → "Unknown command"
+                        𝓝     → "Unknown command" -}
+          cacheResponse cache command
     LBS.hPutStr handle (response ◇ "\n")
     hClose handle
 
@@ -153,7 +159,8 @@ main = do
   listen sock 5
 
   -- Initialize cache & context
-  cache   ← newMVar Map.empty
+  lan_ips ← lanIPs
+  cache   ← newMVar (Cache   { _lanIPs = lan_ips })
   context ← newMVar (Context { _lanCheck = 𝓝, _cache = cache })
 
   -- Start cache updater thread
