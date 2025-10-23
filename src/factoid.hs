@@ -68,8 +68,20 @@ import Data.Time ( getCurrentTime )
 newtype Cache = -- Map.Map LBS.ByteString LBS.ByteString
              Cache { _lanIPs ∷ [IP4] }
 
-cacheResponse ∷ Cache → LBS.ByteString → LBS.ByteString
+newCache ∷ IO (MVar Cache)
+newCache = newMVar (Cache { _lanIPs = [] })
 
+----------------------------------------
+
+{-| call lanIPs, update the cache -}
+updateLanIPs ∷ MVar Cache → IO ()
+updateLanIPs cache = do
+  lan_ips ← lanIPs
+  modifyMVar_ cache (\ c → return $ c { _lanIPs = lan_ips })
+
+----------------------------------------
+
+cacheResponse ∷ Cache → LBS.ByteString → LBS.ByteString
 cacheResponse c "lanIPs" = encode (_lanIPs c)
 cacheResponse c _ = "Unknown request"
 
@@ -78,15 +90,19 @@ cacheResponse c _ = "Unknown request"
 data Context = Context { _cache ∷ MVar Cache
                        , _lanCheck ∷ 𝕄 (Async ()) }
 
+newContext ∷ MVar Cache → IO (MVar Context)
+newContext cache = newMVar (Context { _lanCheck = 𝓝, _cache = cache })
+
+----------------------------------------
+
 lanCheck ∷ Lens' Context (𝕄 (Async()))
 lanCheck = lens _lanCheck (\ c l → c { _lanCheck = l })
 
+
 newLanCheck ∷ Context → IO Context
-newLanCheck c = do
-  t ← mkTimer (SECS 1) (do lan_ips ← lanIPs
-                           modifyMVar_ (_cache c) (\ c' → return $ c' { _lanIPs = lan_ips })
-                           )
-  return $ c & lanCheck ⊩ t
+newLanCheck ctxt = do
+  t ← mkTimer (SECS 1) (updateLanIPs (_cache ctxt))
+  return $ ctxt & lanCheck ⊩ t
 
 ------------------------------------------------------------
 
@@ -160,8 +176,9 @@ main = do
 
   -- Initialize cache & context
   lan_ips ← lanIPs
-  cache   ← newMVar (Cache   { _lanIPs = lan_ips })
-  context ← newMVar (Context { _lanCheck = 𝓝, _cache = cache })
+  cache   ← newCache
+  updateLanIPs cache
+  context ← newContext cache
 
   -- Start cache updater thread
   _ ← forkIO (cacheUpdater cache)
