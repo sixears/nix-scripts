@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes       #-}
 {-# LANGUAGE UnicodeSyntax     #-}
 
 import Base1
@@ -19,12 +20,15 @@ import Control.Concurrent.MVar  ( MVar, readMVar, modifyMVar_, newMVar )
 import Control.Monad            ( forever )
 import Data.Maybe               ( fromJust )
 import Data.String              ( fromString )
-import System.IO                ( BufferMode( NoBuffering ),
+import System.IO                ( BufferMode( NoBuffering ), Handle,
                                   IOMode( ReadWriteMode ),
-                                  hClose, hGetLine, hSetBuffering
+                                  hClose, hGetLine, hPutStrLn, hSetBuffering,
+                                  stderr
                                 )
-import System.Process           ( CreateProcess( std_out ), StdStream( CreatePipe ),
-                                  createProcess, proc )
+import System.Process           ( CreateProcess( std_in, std_out ),
+                                  StdStream( CreatePipe, NoStream ),
+                                  createProcess, proc, withCreateProcess
+                                )
 
 -- bytestring --------------------------
 
@@ -37,6 +41,10 @@ import qualified Data.Map.Strict as Map
 -- duration ----------------------------
 
 import Duration  ( Duration( SECS ), asMicroseconds )
+
+-- fpath -------------------------------
+
+import FPath.AbsFile  ( AbsFile, absfile )
 
 -- ip4 ---------------------------------
 
@@ -127,23 +135,39 @@ cacheUpdater cache = forever $ do
 
 ----------------------------------------
 
+ipPath ∷ AbsFile
+ipPath = [absfile|/run/current-system/sw/bin/ip|]
+
+{-| create a proc, close stdin, leave stderr in place, return the stdout pipe -}
+procPipe ∷ MonadIO μ ⇒ AbsFile → [𝕋] → μ Handle
+procPipe cmd args = liftIO $ do
+  (_,𝓙 stdout,_,_) ← createProcess ((proc (toString cmd) (toString ⊳ args)) { std_in = NoStream, std_out = CreatePipe })
+  return stdout
+
 lanWatcher ∷ MVar Context → MVar Cache → IO ()
 lanWatcher context cache = do
   -- CR martyn: path
-  (_,𝓙 ip_monitor,_,_) ← createProcess ((proc "/run/current-system/sw/bin/ip"
-                      [ "-tshort", "monitor", "address" ]) { std_out = CreatePipe })
-  forever $ do
-    l ← hGetLine ip_monitor
-    modifyMVar_ context $ \ c → do
-      let currentLanCheck = c ⊣ lanCheck
-      case currentLanCheck of
-        𝓙 c' →
-          poll c' ≫ \ case
-            𝓙 _ → newLanCheck c  -- timer has ended
-            𝓝   → return c  -- Timer already exists, do nothing
-        𝓝 → newLanCheck c -- set a new timer
-    putStrLn $ "ip monitor: " ◇ l
-  return ()
+
+  let ip_monitor = ((proc (toString ipPath) [ "-tshort", "monitor", "address" ])
+                    { std_out = CreatePipe })
+--  (_,𝓙 ipm_out,_,_) ← createProcess ip_monitor
+--  ipm_out ← procPipe ipPath [ "-tshort", "monitor", "address" ]
+  let process_ip_monitor_lines ∷ Handle → IO ()
+      process_ip_monitor_lines ipm_out = forever (do
+         l ← hGetLine ipm_out
+         modifyMVar_ context $ \ c → do
+           let currentLanCheck = c ⊣ lanCheck
+           case currentLanCheck of
+             𝓙 c' →
+               poll c' ≫ \ case
+                 𝓙 _ → newLanCheck c  -- timer has ended
+                 𝓝   → return c  -- Timer already exists, do nothing
+             𝓝 → newLanCheck c -- set a new timer
+         putStrLn $ "ip monitor: " ◇ l) ⪼ return ()
+
+
+  withCreateProcess ip_monitor
+    (\ _ (𝓙 ipm_out) _ _ → process_ip_monitor_lines ipm_out)
 
 ----------------------------------------
 
@@ -186,6 +210,7 @@ main = do
   _ ← forkIO (lanWatcher context cache)
 
   -- Accept connections loop
+  hPutStrLn stderr $ "listening on port " ◇ (show port)
   forever $ do
       (conn, addr) ← accept sock
       -- Handle each connection in a separate thread
