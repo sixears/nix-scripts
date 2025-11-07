@@ -18,16 +18,20 @@ import Data.Aeson  ( encode )
 -- async -------------------------------
 
 import Control.Concurrent.Async  qualified as  Async
-import Control.Concurrent.Async  ( Async, async, asyncThreadId, withAsync )
+import Control.Concurrent.Async  ( Async,
+                                   Concurrently( Concurrently, runConcurrently ),
+                                   async
+                                 )
 
 -- base --------------------------------
 
-import Data.Bool                ( bool )
-import Control.Concurrent       ( ThreadId, forkIO, isEmptyMVar, myThreadId,
-                                  newEmptyMVar, putMVar,takeMVar, threadDelay)
-import Control.Concurrent.MVar  ( MVar, readMVar, modifyMVar_, newMVar )
+import Control.Concurrent       ( ThreadId, forkIO, myThreadId, newEmptyMVar,
+                                  putMVar,takeMVar, threadDelay)
+import Control.Concurrent.MVar  ( MVar, readMVar, modifyMVar_, newMVar,
+                                  tryTakeMVar )
 import Control.Exception        ( SomeException, catch, displayException )
 import Control.Monad            ( forever )
+import Data.Semigroup           ( sconcat )
 import Data.String              ( fromString )
 import Data.Tuple               ( uncurry )
 import System.IO                ( BufferMode( NoBuffering ), Handle,
@@ -72,11 +76,11 @@ import IP4  ( IP4 )
 
 -- log-plus ----------------------------
 
-import Log  ( Log, logIO', logIOT )
+import Log  ( Log, logIOT )
 
 -- logging-effect ----------------------
 
-import Control.Monad.Log  ( LoggingT, Severity( Debug, Warning ) )
+import Control.Monad.Log  ( LoggingT, Severity( Debug ) )
 
 -- mockio-plus -------------------------
 
@@ -147,26 +151,22 @@ newCache = liftIO $ newMVar (Cache { _lanIPs = [], _wanIP = 𝓝 })
 
 ----------------------------------------
 
+-- XXX check the timing in effect
 {-| call lanIPs, update the cache -}
 updateLanIPs ∷ Context → IO ()
-updateLanIPs ctxt = do
-  debug "updateLanIPs"
+updateLanIPs ctxt = readerRunT ctxt $ do
+  debug'' "updateLanIPs"
   let cache = _cache ctxt
   lan_ips ← lanIPs
-  -- XXX whenever lan_ips change, call updateWanIP (after 5s) if they're not null
-  -- or set wanIP to 𝓝 if they are
--- XXX we need a more sophisticated approach to lanIP vs wanIP:
---     -) when lanIP is set to [], wanIP should be set to none and timer stopped
---     -) whenever lanIP is set to ![], wanIP should be updated, and a timer
---        restarted
-  modifyMVar_ cache (\ c → do
-                        let prev_ips = _lanIPs c
-                        when (lan_ips ≠ prev_ips) -- lan_ips changed
-                             (case lan_ips of
-                               [] → setNoWanIP ctxt -- no lan, no wan
-                               _  → updateWanIPTimer (SECS 5) ctxt) -- new lan, check wan
-                        return $ c { _lanIPs = lan_ips }
-                    )
+  liftIO $ modifyMVar_ cache
+           (\ c → do
+              let prev_ips = _lanIPs c
+              when (lan_ips ≠ prev_ips) -- lan_ips changed
+                   (case lan_ips of
+                     [] → setNoWanIP ctxt -- no lan, no wan
+                     _  → updateWanIPTimer (SECS 5) ctxt) -- new lan, check wan
+              return $ c { _lanIPs = lan_ips }
+           )
 
 ----------------------------------------
 
@@ -189,17 +189,8 @@ updateWanIP_ = do
 -- XXX update wanIP every minute after a lanIP change, until you get a real
 -- result; every 10m thereafter
 -- XXX single place to update _wanIP; to update _wanIPTimer
--- XXX why the jiggins is this still causing a sleep?
 updateWanIP ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
 updateWanIP = fireAndForget updateWanIP_ {- do
-  ctxt ← ask -- XXX
-  cache ← asks _cache
-  liftIO $ modifyMVar_ cache $ \ c → flip runReaderT ctxt $ do
-{-
-  case _lanIPs c of
-    [] → return $ c { _wanIP = 𝓝 }
-    _  → do
--}
 -- XXX forkIO to do this; check that there isn't already a job in flight;
 -- XXX unify with other thing to do this (currently in lanWatcher)
 -- XXX remove this sleep, which is here purely for diagnostics
@@ -304,18 +295,21 @@ cleanup ctxt = do
       -- I don't think there's any value in waiting for the process to finish
       -- _ <- waitForProcess ph
       ) (Map.toList ps)
-  putStrLn "Cleanup complete."
   putMVar (_exit ctxt) 0
+  debug' ctxt "cleanup complete: exiting"
 
 ----------------------------------------
 
 lanIPsTimer ∷ Context → IO LanCheck
-lanIPsTimer ctxt = {- debug "lanIPsTimer" ⪼ -} LanCheck ⊳ mkTimer (SECS 1) (updateLanIPs ctxt)
+lanIPsTimer ctxt = LanCheck ⊳ mkTimer (SECS 1) (updateLanIPs ctxt)
 
 ----------------------------------------
 
-ensureLanIPsTimer ∷ Context → IO ()
-ensureLanIPsTimer ctxt =
+-- ensureLanIPsTimer ∷ Context → IO ()
+ensureLanIPsTimer ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
+-- ensureLanIPsTimer ctxt =
+ensureLanIPsTimer = do
+  ctxt ← ask
   ensureTimerSet (_lanIPsTimer ctxt) lanIPsTimer ctxt
 
 ----------------------------------------
@@ -361,6 +355,7 @@ mkTimer duration action = do
 ----------------------------------------
 
 -- Function to update cache every 10 seconds
+{-
 cacheUpdater ∷ MVar Cache → IO ()
 cacheUpdater _cache = forever $ do
     -- Simulate cache population
@@ -368,6 +363,7 @@ cacheUpdater _cache = forever $ do
     -- currentTime ← getCurrentTime
     -- updateWanIP cache
     sleep (SECS 10)
+-}
 
 ----------------------------------------
 
@@ -410,9 +406,9 @@ setTimer check mk_timer cache = do
 {-| if a timer is running, leave it alone; but if it has terminated, then create
     a new one.  Note that this will block if the MVar is empty.
 -}
-ensureTimerSet ∷ Pollable α γ ⇒ MVar α → (β → IO α) → β → IO ()
+ensureTimerSet ∷ (MonadIO μ, Pollable α γ) ⇒ MVar α → (β → IO α) → β → μ ()
 ensureTimerSet check mk_timer cache =
-  modifyMVar_ check $ \ l →
+  liftIO $ modifyMVar_ check $ \ l →
   poll l ≫ \ case
     𝓝   → debug "timer still running" ⪼ return l       -- timer is still running
     𝓙 _ → debug "new timer" ⪼ mk_timer cache -- set a new timer
@@ -421,21 +417,24 @@ ensureTimerSet check mk_timer cache =
 
 {-| create a sub-process watching ip monitor; whenever it emits a line, start
     a timer to check the lan IPs (unless one is already running) -}
-lanWatcher ∷ Context → IO ()
-lanWatcher ctxt = do
+-- lanWatcher ∷ Context → IO ()
+lanWatcher ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
+lanWatcher = do
+  ctxt ← ask
   -- warn "lanWatcher - starting"
   -- warn' ctxt "lanWatcher: starting"
-  debug' ctxt "lanwatcher: starting"
+  debug'' "lanwatcher: starting"
   -- warn "lanWatcher - still starting"
   let process_ip_monitor_lines ∷ Handle → IO ()
-      process_ip_monitor_lines ipm_out = forever (do
-         l ← hGetLine ipm_out
-         ensureLanIPsTimer ctxt
-         putStrLn $ "ip monitor: " ◇ l) ⪼ return ()
+      process_ip_monitor_lines ipm_out = forever (ⵎ ctxt $ do
+         l ← liftIO $ hGetLine ipm_out
+         ensureLanIPsTimer -- ctxt
+         liftIO $ putStrLn $ "ip monitor: " ◇ l) ⪼ return ()
 
-  withStdoutProc ipMonitor
+  liftIO $ withStdoutProc ipMonitor
     (\ ipm_out p → do
       debug' ctxt "lanWatcher: created proc"
+      -- XXX ip seems to be inheriting the listener port!
       modifyMVar_ (_childProcs ctxt) $ return ∘ Map.insert "ip monitor address -tshort" p
       process_ip_monitor_lines ipm_out
       warn "lanWatcher: all done"
@@ -451,6 +450,8 @@ instance HasContext Context where
 
 instance HasContext (Context,β) where
   getContext = fst
+
+-- XXX unify log, log', debug, debug'
 
 log' ∷ (MonadIO μ, HasContext θ, MonadReader θ μ) ⇒ Severity → 𝕋 → μ ()
 log' sev t = do
@@ -472,12 +473,6 @@ debug'' ∷ (MonadIO μ, MonadReader Context μ) ⇒ 𝕋 → μ ()
 debug'' t = do
   tid ← liftIO myThreadId
   log' Debug ([fmt|«%w»|] tid ◇ t)
-
-warn' ∷ MonadIO μ ⇒ Context → 𝕋 → μ ()
-warn' = log Warning
-
-warn'' ∷ (MonadIO μ, HasContext θ, MonadReader θ μ) ⇒ 𝕋 → μ ()
-warn'' = log' Warning
 
 -- Function to handle client requests
 handleClient ∷ (MonadIO μ, MonadReader Context μ) ⇒ Socket → μ ()
@@ -523,30 +518,40 @@ readerRunT ∷ β → ReaderT β η α → η α
 readerRunT = flip runReaderT
 
 -- U2d4e -- Tifinagh letter yam
-ⵎ ∷ ∀ α η γ . (Context, Async γ) → ReaderT (Context, Async γ) η α → η α
+ⵎ ∷ ∀ α η . Context → ReaderT (Context) η α → η α
 ⵎ = readerRunT
 
 catchLog ∷ SomeException → IO ()
 catchLog e = hPutStrLn stderr $ "Error in thread: " ◇ displayException e
 
-fireAndForget ∷ (MonadIO μ, MonadReader Context μ) ⇒
-                 ReaderT Context IO () → μ ()
-fireAndForget io = do
-  ctxt ∷ Context ← ask
-  liftIO $ async $ catch (runReaderT io ctxt) catchLog
+fireAndForget' ∷ MonadIO μ ⇒ Context → ReaderT Context IO () → μ ()
+fireAndForget' ctxt io = do
+  _ ← liftIO $ async $ catch (runReaderT io ctxt) catchLog
   return ()
 
-acceptor ∷ Socket → Context → IO ThreadId
-acceptor sock ctxt = do
-  port ← socketPort sock
-  -- hPutStrLn stderr $ "listening on port " ◇ (show $ port)
+fireAndForget ∷ (MonadIO μ, MonadReader Context μ) ⇒
+                 ReaderT Context IO () → μ ()
+fireAndForget io = ask ≫ \ ctxt → fireAndForget' ctxt io
 
-  forkIO $ forever $ do
+acceptor ∷ (MonadIO μ, MonadReader Context μ) ⇒ Socket → μ ThreadId
+acceptor sock = do
+  ctxt ← ask
+  port ← liftIO $ socketPort sock
+  warn $ [fmt|listening on port %d|] port
+
+  liftIO $ forkIO $ forever $ do
     (conn, _addr) ← accept sock
 
     -- handle each connection in a separate thread
-    -- fireAndForget (flip runReaderT ctxt $ handleClient conn)
     flip runReaderT ctxt $ fireAndForget (handleClient conn)
+
+liftIO' ∷ MonadIO μ ⇒ IO α → μ ()
+liftIO' io = liftIO io ⪼ return ()
+
+forks ∷ MonadIO μ ⇒ β → NonEmpty (ReaderT β IO ()) → μ ()
+forks ctxt =
+  liftIO' ∘ forkIO ∘ runConcurrently ∘ sconcat
+          ∘ fmap (Concurrently ∘ readerRunT ctxt)
 
 -- XXX use logging warn/info/debug
 main ∷ IO ()
@@ -558,48 +563,14 @@ main = let desc ∷ 𝕋 = "monitor & report some facts to interested callers"
                ctxt ← newContext
                _ ← installCtrlCHandler ctxt
 
-               -- XXX MonadReader for context
-               liftIO $ do
-                 -- gentlemen, start your engines
-                 -- beware! withAsync waits for its result
-                 -- withAsync (cacheUpdater (_cache ctxt)) $ \ _ →
-                 async $
-                   withAsync (lanWatcher ctxt) $ \ þ → do
-                     -- debug' ctxt "debug'"
-                     -- warn' ctxt "warn'"
-                     -- XXX this is the threadID
-
-                     -- beware! withAsync waits for its result
-{-
-                     async $
-                     -- withAsync (return()) $ \ _ →
-                       forever $ do
-                         -- isEmptyMVar (_outputChannel ctxt) ≫ warn ∘ [fmt|zzz %t|] ∘ bool "false" "true"
-                         readMVar (_outputChannel ctxt) ≫ warn ∘ T.pack ∘ show
-                         sleep (SECS 1)
--}
-                     runReaderT (warn'' "who's that at the door?") (ctxt,þ)
-                     _ ← acceptor sock ctxt
-                     warn "accepting (1)"
-                     runReaderT (warn'' "accepting (2)") (ctxt,þ)
-                     warn "accepting (3)"
---                     logIOT Debug "debug"
---                     _ ← forever $ liftIO (takeMVar (_outputChannel ctxt)) ≫ uncurry logIOT
-                     warn "all done"
-                     return ()
-{-
-                     -- Accept connections loop
-                     hPutStrLn stderr $ "listening on port " ◇ (show $ _port opts)
-                     _ ← forkIO $ forever $ do
-                           (conn, _addr) ← accept sock
-                           -- Handle each connection in a separate thread
-                           forkIO $ handleClient conn (_cache ctxt)
-
-                     _ ← takeMVar (_exit ctxt) ≫ exitWith
-                     return ()
--}
-               warn "here"
-               forever $ liftIO (takeMVar (_outputChannel ctxt)) ≫ uncurry logIOT
+               forks ctxt $ lanWatcher :| [ ⵎ ctxt $ acceptor sock ⪼ return () ]
+               -- this has to run at the top level, to benefit from the StdMain
+               -- log instance
+               forever $ do
+                 liftIO (takeMVar (_outputChannel ctxt)) ≫ uncurry logIOT
+                 liftIO (tryTakeMVar (_exit ctxt)) ≫ \ case
+                   𝓝 → return ()
+                   𝓙 e → exitWith e ⪼ return ()
 
 
 -- that's all, folks! ----------------------------------------------------------
