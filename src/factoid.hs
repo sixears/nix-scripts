@@ -5,8 +5,7 @@
 {-# LANGUAGE QuasiQuotes            #-}
 {-# LANGUAGE UnicodeSyntax          #-}
 
--- XXX Thread output (i.e., run it through a single thread)
--- XXX output threadID with output
+-- XXX sort function, class ordering
 
 import Base1
 import Prelude  ( error, round )
@@ -31,13 +30,13 @@ import Control.Concurrent.MVar  ( MVar, readMVar, modifyMVar_, newMVar,
                                   tryTakeMVar )
 import Control.Exception        ( SomeException, catch, displayException )
 import Control.Monad            ( forever )
+import Data.List                ( isPrefixOf )
 import Data.Semigroup           ( sconcat )
 import Data.String              ( fromString )
 import Data.Tuple               ( uncurry )
 import System.IO                ( BufferMode( NoBuffering ), Handle,
                                   IOMode( ReadMode, ReadWriteMode ),
-                                  hClose, hGetLine, hPutStrLn, hSetBuffering,
-                                  openFile, putStrLn, stderr
+                                  hClose, hGetLine, hSetBuffering, openFile
                                 )
 import System.Process           ( CreateProcess( std_in, std_out, std_err ),
                                   ProcessHandle,
@@ -80,7 +79,7 @@ import Log  ( Log, logIOT )
 
 -- logging-effect ----------------------
 
-import Control.Monad.Log  ( LoggingT, Severity( Debug, Warning ) )
+import Control.Monad.Log  ( LoggingT, Severity( Error, Warning, Debug ) )
 
 -- mockio-plus -------------------------
 
@@ -93,6 +92,11 @@ import MonadIO.Base  ( getArgs )
 -- mtl ---------------------------------
 
 import Control.Monad.Reader  ( MonadReader, ReaderT, runReaderT, ask, asks )
+
+-- natural -----------------------------
+
+import Natural.Length     ( len_ )
+import Natural.Replicate  ( drop_ )
 
 -- network -----------------------------
 
@@ -121,10 +125,11 @@ import StdMain.ProcOutputParseError  ( ScriptError )
 
 -- text --------------------------------
 
-import Data.Text     qualified as  T
+-- import Data.Text     qualified as  T
 
 -- time --------------------------------
 
+-- XXX add time to all cached values / check time & changed time? access time?
 -- import Data.Time ( getCurrentTime )
 
 -- unix --------------------------------
@@ -133,8 +138,10 @@ import System.Posix.Signals  ( Handler( Catch ), installHandler, keyboardSignal 
 
 --------------------------------------------------------------------------------
 
-data Cache = -- Map.Map LBS.ByteString LBS.ByteString
-             Cache { _lanIPs ∷ [IP4]
+ø :: MonadIO μ ⇒ IO α → μ ()
+ø io = liftIO io ⪼ return ()
+
+data Cache = Cache { _lanIPs ∷ [IP4]
                    , _wanIP  ∷ 𝕄 IP4
                    }
 
@@ -263,7 +270,7 @@ cleanup ctxt = do
 -- XXX use async for ip monitor thread?
 -- XXX terminate threads first?
 
-  putStrLn "Cleanup: terminating child processes..."
+  debug' ctxt "Cleanup: terminating child processes..."
   -- XXX delete procs as we terminate them, and thus update the MVar
   ps ← readMVar (_childProcs ctxt)
   mapM_ (\ (nm,p) → do
@@ -326,9 +333,7 @@ sleep dur = liftIO $ threadDelay (round $ dur ⊣ asMicroseconds)
 ----------------------------------------
 
 mkTimer ∷ Duration → IO α → IO (Async α)
-mkTimer duration action = do
-  -- putStrLn "mkTimer"
-  async $ sleep duration ⪼ action
+mkTimer duration action = async $ sleep duration ⪼ action
 
 ----------------------------------------
 
@@ -400,15 +405,12 @@ ensureTimerSet check mk_timer ctxt =
 lanWatcher ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
 lanWatcher = do
   ctxt ← ask
-  -- warn "lanWatcher - starting"
-  -- warn' ctxt "lanWatcher: starting"
   debug'' "lanwatcher: starting"
-  -- warn "lanWatcher - still starting"
   let process_ip_monitor_lines ∷ Handle → IO ()
-      process_ip_monitor_lines ipm_out = forever (ⵎ ctxt $ do
+      process_ip_monitor_lines ipm_out = forever $ ø (ⵎ ctxt $ do
          l ← liftIO $ hGetLine ipm_out
          ensureLanIPsTimer -- ctxt
-         liftIO $ putStrLn $ "ip monitor: " ◇ l) ⪼ return ()
+         debug'' $ [fmt|ip monitor: %s|] l)
 
   liftIO $ withStdoutProc ipMonitor
     (\ ipm_out p → do
@@ -430,21 +432,16 @@ instance HasContext Context where
 instance HasContext (Context,β) where
   getContext = fst
 
--- XXX unify log, log', debug, debug'
+removePrefix ∷ 𝕊 → 𝕊 → 𝕊
+removePrefix prefix str
+  | prefix `isPrefixOf` str = drop_ (len_ prefix) str
+  | otherwise = str
 
-{-
-  output_channel ← asks (_outputChannel ∘ getContext)
-  -- warn $ [fmt|log! %w %w|] sev t
-  liftIO ∘ putMVar output_channel ∘ (sev,) $ t
-  -- warn "logged"
--}
 -- XXX hoik liftIO?
 log ∷ MonadIO μ ⇒ Context → Severity → 𝕋 → μ ()
-log ctxt sev t = do
-  -- warn $ [fmt|log! %w %w|] sev t
-  tid ← liftIO myThreadId
-  liftIO ∘ putMVar (_outputChannel ctxt) ∘ (sev,) $ ([fmt|«%w»|] tid ◇ t)
-  -- warn "logged"
+log ctxt sev t = liftIO $ do
+  tid ← (removePrefix "ThreadId " ∘ show) ⊳ myThreadId
+  putMVar (_outputChannel ctxt) ∘ (sev,) $ ([fmt|«%05s» |] tid ◇ t)
 
 log' ∷ (MonadIO μ, HasContext θ, MonadReader θ μ) ⇒ Severity → 𝕋 → μ ()
 log' sev t = asks getContext ≫ \ ctxt → log ctxt sev t
@@ -452,14 +449,10 @@ log' sev t = asks getContext ≫ \ ctxt → log ctxt sev t
 debug' ∷ MonadIO μ ⇒ Context → 𝕋 → μ ()
 debug' ctxt = log ctxt Debug
 
--- XXX removed initial ThreadId
--- XXX move this to log/log'
+error' ∷ MonadIO μ ⇒ Context → 𝕋 → μ ()
+error' ctxt = log ctxt Error
+
 debug'' ∷ (MonadIO μ, MonadReader Context μ) ⇒ 𝕋 → μ ()
-{-
-debug'' t = do
-  tid ← liftIO myThreadId
-  log' Debug ([fmt|«%w»|] tid ◇ t)
--}
 debug'' = log' Debug
 
 warn'' ∷ (MonadIO μ, MonadReader Context μ) ⇒ 𝕋 → μ ()
@@ -516,13 +509,8 @@ readerRunT = flip runReaderT
 ⵎ ∷ ∀ α η . Context → ReaderT (Context) η α → η α
 ⵎ = readerRunT
 
-catchLog ∷ SomeException → IO ()
-catchLog e = hPutStrLn stderr $ "Error in thread: " ◇ displayException e
-
 fireAndForget' ∷ MonadIO μ ⇒ Context → ReaderT Context IO () → μ ()
-fireAndForget' ctxt io = do
-  _ ← liftIO $ async $ catch (runReaderT io ctxt) catchLog
-  return ()
+fireAndForget' ctxt io = ø $ async $ catch (runReaderT io ctxt) (\ (e ∷ SomeException) → error' ctxt $ [fmt|Error in thread: %s|] $ displayException e)
 
 fireAndForget ∷ (MonadIO μ, MonadReader Context μ) ⇒
                  ReaderT Context IO () → μ ()
@@ -540,13 +528,9 @@ acceptor sock = do
     -- handle each connection in a separate thread
     flip runReaderT ctxt $ fireAndForget (handleClient conn)
 
-liftIO' ∷ MonadIO μ ⇒ IO α → μ ()
-liftIO' io = liftIO io ⪼ return ()
-
 forks ∷ MonadIO μ ⇒ β → NonEmpty (ReaderT β IO ()) → μ ()
 forks ctxt =
-  liftIO' ∘ forkIO ∘ runConcurrently ∘ sconcat
-          ∘ fmap (Concurrently ∘ readerRunT ctxt)
+  ø ∘ forkIO ∘ runConcurrently ∘ sconcat ∘ fmap (Concurrently ∘ readerRunT ctxt)
 
 -- XXX use logging warn/info/debug
 main ∷ IO ()
@@ -558,14 +542,14 @@ main = let desc ∷ 𝕋 = "monitor & report some facts to interested callers"
                ctxt ← newContext
                _ ← installCtrlCHandler ctxt
 
-               forks ctxt $ lanWatcher :| [ ⵎ ctxt $ acceptor sock ⪼ return () ]
+               forks ctxt $ lanWatcher :| [ ø ∘ ⵎ ctxt $ acceptor sock ]
                -- this has to run at the top level, to benefit from the StdMain
                -- log instance
                forever $ do
                  liftIO (takeMVar (_outputChannel ctxt)) ≫ uncurry logIOT
                  liftIO (tryTakeMVar (_exit ctxt)) ≫ \ case
                    𝓝 → return ()
-                   𝓙 e → exitWith e ⪼ return ()
+                   𝓙 e → ø $ exitWith e
 
 
 -- that's all, folks! ----------------------------------------------------------
