@@ -138,20 +138,137 @@ import System.Posix.Signals  ( Handler( Catch ), installHandler, keyboardSignal 
 
 --------------------------------------------------------------------------------
 
+----------------------------------------
+--          UTILITY FUNCTIONS         --
+----------------------------------------
+
 ø :: MonadIO μ ⇒ IO α → μ ()
 ø io = liftIO io ⪼ return ()
+
+------------------------------------------------------------
+--                        Pollable                        --
+------------------------------------------------------------
+
+class Pollable α β | α → β where
+  poll ∷ α → IO (𝕄 (𝔼 SomeException β))
+
+------------------------------------------------------------
+--                       Cancellable                      --
+------------------------------------------------------------
+
+class Cancellable α where
+  cancel ∷ α → IO ()
+  cancel' ∷ α → IO α
+  cancel' a = cancel a ⪼ return a
+
+------------------------------------------------------------
+
+{-| create an Async that waits some time before executing an IO -}
+mkTimer ∷ Duration → IO α → IO (Async α)
+mkTimer duration action = async $ sleep duration ⪼ action
+
+----------------------------------------
+
+{-| Set an MVar, nixing any existing Cancellable in place before replacing it
+    with a new one.  Note that this will block if the MVar is empty.
+-}
+-- β is typically Context
+setCancelMVar ∷ (MonadIO μ, Cancellable α)⇒ MVar α → (β → IO α) → β → μ ()
+setCancelMVar mv mk x = liftIO $ modifyMVar_ mv $ \ c → cancel c ⪼ mk x
+
+----------------------------------------
+
+{-| If a Pollable is running, leave it alone; but if it has terminated, then
+    create a new one.  Note that this will block if the MVar is empty.
+-}
+-- β is typically Context
+ensureMVarSet ∷ (MonadIO μ, Pollable α γ) ⇒ MVar α → (β → IO α) → β → μ ()
+ensureMVarSet mv mk x =
+  liftIO $ modifyMVar_ mv $ \ l → poll l ≫ maybe (return l) (const $ mk x)
+
+------------------------------------------------------------
+--                          Cache                         --
+------------------------------------------------------------
 
 data Cache = Cache { _lanIPs ∷ [IP4]
                    , _wanIP  ∷ 𝕄 IP4
                    }
 
+----------
+
 newCache ∷ MonadIO μ ⇒ μ (MVar Cache)
 newCache = liftIO $ newMVar (Cache { _lanIPs = [], _wanIP = 𝓝 })
 
-----------------------------------------
+
+------------------------------------------------------------
+--                        LanCheck                        --
+------------------------------------------------------------
+
+newtype LanCheck = LanCheck (Async ())
+
+----------
+
+instance Pollable LanCheck () where poll (LanCheck a) = Async.poll a
+
+----------
+
+instance Cancellable LanCheck where cancel (LanCheck w) = Async.cancel w
+
+------------------------------------------------------------
+--                        WanCheck                        --
+------------------------------------------------------------
+
+newtype WanCheck = WanCheck (Async ())
+
+----------
+
+instance Cancellable WanCheck where
+  cancel (WanCheck w) = Async.cancel w
+
+------------------------------------------------------------
+--                        Context                         --
+------------------------------------------------------------
+
+data Context = Context { _cache         ∷ MVar Cache
+                       -- it is important to ensure that lanCheck
+                       -- is always defined, as there's no way to atomically
+                       -- modify it if it's empty
+                       , _lanIPsTimer   ∷ MVar LanCheck
+                         -- ^ the timer for a lanIPs update
+                       , _wanIPTimer    ∷ MVar WanCheck
+                         -- ^ the timer for a wanIP update
+                       , _childProcs    ∷ MVar (Map.Map 𝕋 ProcessHandle)
+                       , _childThreads  ∷ MVar (Map.Map 𝕋 ThreadId)
+                       , _outputChannel ∷ MVar (Severity, 𝕋)
+                       , _exit          ∷ MVar Word8
+                       }
+
+----------
+
+newContext ∷ MonadIO μ ⇒ μ Context
+newContext = liftIO $ do
+  cache          ← newCache
+  exit           ← newEmptyMVar
+  lan_check      ← newEmptyMVar
+  wan_check      ← WanCheck ⊳ async (return ()) ≫ newMVar
+  child_procs    ← newMVar Map.empty
+  child_threads  ← newMVar Map.empty
+  output_channel ← newEmptyMVar
+  let ctxt = Context { _cache         = cache
+                     , _lanIPsTimer   = lan_check
+                     , _wanIPTimer    = wan_check
+                     , _childProcs    = child_procs
+                     , _childThreads  = child_threads
+                     , _exit          = exit
+                     , _outputChannel = output_channel
+                     }
+  lanIPsTimer ctxt ⪼ return ctxt
+
+------------------------------------------------------------
 
 -- XXX check the timing in effect
-{-| call lanIPs, update the cache -}
+{-| call lanIPs, update the cache; if there's a change, set a timer to update
+    the WanIP (unless there's no LanIPs: in which case, set the WanIP to 𝓝 -}
 updateLanIPs ∷ Context → IO ()
 updateLanIPs ctxt = readerRunT ctxt $ do
   debug'' "updateLanIPs"
@@ -200,71 +317,6 @@ cacheResponse _ _        = "Unknown request"
 
 ------------------------------------------------------------
 
-class Pollable α β | α → β where
-  poll ∷ α → IO (𝕄 (𝔼 SomeException β))
-
-------------------------------------------------------------
-
-class Cancellable α where
-  cancel ∷ α → IO ()
-  cancel' ∷ α → IO α
-  cancel' a = cancel a ⪼ return a
-
-------------------------------------------------------------
-
-newtype LanCheck = LanCheck (Async ())
-
-instance Pollable LanCheck () where
-  poll (LanCheck a) = Async.poll a
-
-instance Cancellable LanCheck where
-  cancel (LanCheck w) = Async.cancel w
-
-----------------------------------------
-
-newtype WanCheck = WanCheck (Async ())
-
-instance Cancellable WanCheck where
-  cancel (WanCheck w) = Async.cancel w
-
-------------------------------------------------------------
-
-data Context = Context { _cache         ∷ MVar Cache
-                       -- it is important to ensure that lanCheck
-                       -- is always defined, as there's no way to atomically
-                       -- modify it if it's empty
-                       , _lanIPsTimer   ∷ MVar LanCheck
-                         -- ^ the timer for a lanIPs update
-                       , _wanIPTimer    ∷ MVar WanCheck
-                         -- ^ the timer for a wanIP update
-                       , _childProcs    ∷ MVar (Map.Map 𝕋 ProcessHandle)
-                       , _childThreads  ∷ MVar (Map.Map 𝕋 ThreadId)
-                       , _outputChannel ∷ MVar (Severity, 𝕋)
-                       , _exit          ∷ MVar Word8
-                       }
-
-newContext ∷ MonadIO μ ⇒ μ Context
-newContext = liftIO $ do
-  cache          ← newCache
-  exit           ← newEmptyMVar
-  lan_check      ← newEmptyMVar
-  wan_check      ← WanCheck ⊳ async (return ()) ≫ newMVar
-  child_procs    ← newMVar Map.empty
-  child_threads  ← newMVar Map.empty
-  output_channel ← newEmptyMVar
-  let ctxt = Context { _cache         = cache
-                     , _lanIPsTimer   = lan_check
-                     , _wanIPTimer    = wan_check
-                     -- XXX shouldn't these be MVars too?
-                     , _childProcs    = child_procs
-                     , _childThreads  = child_threads
-                     , _exit          = exit
-                     , _outputChannel = output_channel
-                     }
-  lanIPsTimer ctxt ⪼ return ctxt
-
-----------------------------------------
-
 cleanup ∷ Context → IO ()
 cleanup ctxt = do
 -- XXX use async for ip monitor thread?
@@ -290,12 +342,10 @@ lanIPsTimer ctxt = LanCheck ⊳ mkTimer (SECS 1) (updateLanIPs ctxt)
 
 ----------------------------------------
 
--- ensureLanIPsTimer ∷ Context → IO ()
 ensureLanIPsTimer ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
--- ensureLanIPsTimer ctxt =
 ensureLanIPsTimer = do
   ctxt ← ask
-  ensureTimerSet (_lanIPsTimer ctxt) lanIPsTimer ctxt
+  ensureMVarSet (_lanIPsTimer ctxt) lanIPsTimer ctxt
 
 ----------------------------------------
 
@@ -309,7 +359,7 @@ wanIPTimer dur ctxt = do
 updateWanIPTimer ∷ MonadIO μ ⇒ Duration → Context → μ ()
 updateWanIPTimer dur ctxt = liftIO $ do
   debug' ctxt "updateWanIPTimer"
-  setTimer (_wanIPTimer ctxt) (wanIPTimer dur) ctxt
+  setCancelMVar (_wanIPTimer ctxt) (wanIPTimer dur) ctxt
 
 ----------------------------------------
 
@@ -329,11 +379,6 @@ setNoWanIP ctxt = do
 
 sleep ∷ MonadIO μ ⇒ Duration → μ ()
 sleep dur = liftIO $ threadDelay (round $ dur ⊣ asMicroseconds)
-
-----------------------------------------
-
-mkTimer ∷ Duration → IO α → IO (Async α)
-mkTimer duration action = async $ sleep duration ⪼ action
 
 ----------------------------------------
 
@@ -373,32 +418,6 @@ withStdoutProc create_proc action = do
 
 ----------------------------------------
 
-{-| set a timer, nixing any existing timer in place
-    a new one.  Note that this will block if the MVar is empty.
--}
-setTimer ∷ Cancellable α ⇒ MVar α → (Context → IO α) → Context → IO ()
-setTimer check mk_timer ctxt = do
-  debug' ctxt "setTimer"
-  modifyMVar_ check $ \ c → do
-    debug' ctxt "setTimer (2)"
-    cancel c
-    mk_timer ctxt
-
-----------------------------------------
-
-{-| if a timer is running, leave it alone; but if it has terminated, then create
-    a new one.  Note that this will block if the MVar is empty.
--}
-ensureTimerSet ∷ (MonadIO μ, Pollable α γ) ⇒
-                 MVar α → (Context → IO α) → Context → μ ()
-ensureTimerSet check mk_timer ctxt =
-  liftIO $ modifyMVar_ check $ \ l →
-  poll l ≫ \ case
-    𝓝   → debug' ctxt "timer still running" ⪼ return l       -- timer is still running
-    𝓙 _ → debug' ctxt "new timer" ⪼ mk_timer ctxt -- set a new timer
-
-----------------------------------------
-
 {-| create a sub-process watching ip monitor; whenever it emits a line, start
     a timer to check the lan IPs (unless one is already running) -}
 -- lanWatcher ∷ Context → IO ()
@@ -432,14 +451,12 @@ instance HasContext Context where
 instance HasContext (Context,β) where
   getContext = fst
 
-removePrefix ∷ 𝕊 → 𝕊 → 𝕊
-removePrefix prefix str
-  | prefix `isPrefixOf` str = drop_ (len_ prefix) str
-  | otherwise = str
-
--- XXX hoik liftIO?
 log ∷ MonadIO μ ⇒ Context → Severity → 𝕋 → μ ()
 log ctxt sev t = liftIO $ do
+  let removePrefix ∷ 𝕊 → 𝕊 → 𝕊
+      removePrefix prefix str
+        | prefix `isPrefixOf` str = drop_ (len_ prefix) str
+        | otherwise = str
   tid ← (removePrefix "ThreadId " ∘ show) ⊳ myThreadId
   putMVar (_outputChannel ctxt) ∘ (sev,) $ ([fmt|«%05s» |] tid ◇ t)
 
