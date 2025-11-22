@@ -8,7 +8,7 @@
 -- XXX sort function, class ordering
 
 import Base1
-import Prelude  ( error, round )
+import Prelude  ( round )
 
 -- aeson -------------------------------
 
@@ -27,7 +27,7 @@ import Control.Concurrent.Async  ( Async,
 import Control.Concurrent       ( ThreadId, forkIO, myThreadId, newEmptyMVar,
                                   putMVar,takeMVar, threadDelay)
 import Control.Concurrent.MVar  ( MVar, readMVar, modifyMVar_, newMVar,
-                                  tryTakeMVar )
+                                  tryPutMVar, tryTakeMVar )
 import Control.Exception        ( SomeException, catch, displayException )
 import Control.Monad            ( forever )
 import Data.List                ( isPrefixOf )
@@ -37,6 +37,7 @@ import Data.Tuple               ( uncurry )
 import System.IO                ( BufferMode( NoBuffering ), Handle,
                                   IOMode( ReadMode, ReadWriteMode ),
                                   hClose, hGetLine, hSetBuffering, openFile
+                                , putStrLn
                                 )
 import System.Process           ( CreateProcess( std_in, std_out, std_err ),
                                   ProcessHandle,
@@ -79,7 +80,8 @@ import Log  ( Log, logIOT )
 
 -- logging-effect ----------------------
 
-import Control.Monad.Log  ( LoggingT, Severity( Error, Warning, Debug ) )
+import Control.Monad.Log  ( LoggingT, MonadLog,
+                            Severity( Error, Warning, Debug ) )
 
 -- mockio-plus -------------------------
 
@@ -125,7 +127,7 @@ import StdMain.ProcOutputParseError  ( ScriptError )
 
 -- text --------------------------------
 
--- import Data.Text     qualified as  T
+import Data.Text  qualified as  T
 
 -- time --------------------------------
 
@@ -138,12 +140,57 @@ import System.Posix.Signals  ( Handler( Catch ), installHandler, keyboardSignal 
 
 --------------------------------------------------------------------------------
 
+ipPath ∷ AbsFile
+ipPath = [absfile|/run/current-system/sw/bin/ip|]
+
 ----------------------------------------
 --          UTILITY FUNCTIONS         --
 ----------------------------------------
 
 ø :: MonadIO μ ⇒ IO α → μ ()
 ø io = liftIO io ⪼ return ()
+
+----------------------------------------
+
+sleep ∷ MonadIO μ ⇒ Duration → μ ()
+sleep dur = liftIO $ threadDelay (round $ dur ⊣ asMicroseconds)
+
+----------------------------------------
+
+readerRunT ∷ ∀ α β η . β → ReaderT β η α → η α
+readerRunT = flip runReaderT
+
+--------------------
+
+-- U2d4e -- Tifinagh letter yam
+ⵎ ∷ ∀ α β η . HasOutputChannel β ⇒ β → ReaderT β η α → η α
+ⵎ = readerRunT
+
+----------------------------------------
+
+{-| fire off a number concurrent threads (each a MonadReader) -}
+forks ∷ MonadIO μ ⇒ β → NonEmpty (ReaderT β IO ()) → μ ()
+forks ctxt =
+--  ø ∘ forkIO ∘ runConcurrently ∘ sconcat ∘ fmap (Concurrently ∘ readerRunT ctxt)
+  ø ∘ async ∘ runConcurrently ∘ sconcat ∘ fmap (Concurrently ∘ readerRunT ctxt)
+
+----------------------------------------
+
+{-| run some IO (that is an OutputChannel Reader) in a thread, without ever
+    collecting -}
+fireAndForget' ∷ (MonadIO μ, HasOutputChannel α) ⇒ α → ReaderT α IO () → μ ()
+fireAndForget' oc io =
+  let displaySomeException = displayException @SomeException
+      catchE e = error oc $ [fmt|Error in thread: %s|] $ displaySomeException e
+  in ø $ async $ catch (runReaderT io oc) catchE
+
+--------------------
+
+{-| run some IO (that is an OutputChannel Reader) in a thread, without ever
+    collecting (suitable for an OutputChannel Reader context) -}
+fireAndForget ∷ (MonadIO μ, HasOutputChannel α, MonadReader α μ) ⇒
+                ReaderT α IO () → μ ()
+fireAndForget io = ask ≫ \ oc → fireAndForget' oc io
 
 ------------------------------------------------------------
 --                        Pollable                        --
@@ -183,22 +230,13 @@ setCancelMVar mv mk x = liftIO $ modifyMVar_ mv $ \ c → cancel c ⪼ mk x
 -}
 -- β is typically Context
 ensureMVarSet ∷ (MonadIO μ, Pollable α γ) ⇒ MVar α → (β → IO α) → β → μ ()
-ensureMVarSet mv mk x =
-  liftIO $ modifyMVar_ mv $ \ l → poll l ≫ maybe (return l) (const $ mk x)
+ensureMVarSet mv mk x = do
+  liftIO $ putStrLn "ensureMVarSet"
+  liftIO (tryTakeMVar mv) ≫ \ case
+    𝓝 → ø $ (mk x) ≫ tryPutMVar mv
+    𝓙 _ → liftIO $ modifyMVar_ mv $ \ l → poll l ≫ maybe (mk x) (const $ return l)
 
-------------------------------------------------------------
---                          Cache                         --
-------------------------------------------------------------
-
-data Cache = Cache { _lanIPs ∷ [IP4]
-                   , _wanIP  ∷ 𝕄 IP4
-                   }
-
-----------
-
-newCache ∷ MonadIO μ ⇒ μ (MVar Cache)
-newCache = liftIO $ newMVar (Cache { _lanIPs = [], _wanIP = 𝓝 })
-
+  liftIO $ putStrLn "ensuremvarset"
 
 ------------------------------------------------------------
 --                        LanCheck                        --
@@ -226,6 +264,100 @@ instance Cancellable WanCheck where
   cancel (WanCheck w) = Async.cancel w
 
 ------------------------------------------------------------
+--                          Cache                         --
+------------------------------------------------------------
+
+data Cache = Cache { _lanIPs ∷ [IP4]
+                   , _wanIP  ∷ 𝕄 IP4
+                   }
+
+----------
+
+newCache ∷ MonadIO μ ⇒ μ (MVar Cache)
+newCache = liftIO $ newMVar (Cache { _lanIPs = [], _wanIP = 𝓝 })
+
+----------------------------------------
+
+cacheResponse ∷ Cache → LBS.ByteString → LBS.ByteString
+cacheResponse c "lanIPs" = encode $ _lanIPs c
+cacheResponse c "wanIP"  = encode $ _wanIP  c
+cacheResponse _ _        = "Unknown request"
+
+------------------------------------------------------------
+--                     OutputChannel                      --
+------------------------------------------------------------
+
+newtype OutputChannel = OutputChannel (MVar (Severity,𝕋))
+
+----------------------------------------
+
+newOutputChannel ∷ MonadIO μ ⇒ μ OutputChannel
+newOutputChannel = liftIO $ OutputChannel ⊳ newEmptyMVar
+
+----------------------------------------
+
+output ∷ MonadIO μ ⇒ OutputChannel → Severity → 𝕋 → μ ()
+output (OutputChannel mv) sv t = liftIO $ putMVar mv (sv,t)
+
+----------------------------------------
+
+writeOutput ∷ (MonadIO μ, MonadLog (Log ω) μ, Default ω) ⇒ OutputChannel → μ ()
+writeOutput (OutputChannel mv) = liftIO (takeMVar mv) ≫ uncurry logIOT
+
+----------------------------------------
+--          HasOutputChannel          --
+----------------------------------------
+
+class HasOutputChannel α where
+  getOutputChannel ∷ α → OutputChannel
+
+----------
+
+instance HasOutputChannel OutputChannel where
+  getOutputChannel = id
+
+----------------------------------------
+
+log ∷ (MonadIO μ, HasOutputChannel α) ⇒ α → Severity → 𝕋 → μ ()
+log oc sev t = liftIO $ do
+  let removePrefix ∷ 𝕊 → 𝕊 → 𝕊
+      removePrefix prefix str
+        | prefix `isPrefixOf` str = drop_ (len_ prefix) str
+        | otherwise = str
+  tid ← (removePrefix "ThreadId " ∘ show) ⊳ myThreadId
+  output (getOutputChannel oc) sev $ ([fmt|«%05s» |] tid ◇ t)
+
+--------------------
+
+error ∷ (MonadIO μ, HasOutputChannel α) ⇒ α → 𝕋 → μ ()
+error oc = log oc Error
+
+--------------------
+
+warn ∷ (MonadIO μ, HasOutputChannel α) ⇒ α → 𝕋 → μ ()
+warn oc = log oc Warning
+
+--------------------
+
+debug ∷ (MonadIO μ, HasOutputChannel α) ⇒ α → 𝕋 → μ ()
+debug oc = log oc Debug
+
+----------------------------------------
+
+log' ∷ (MonadIO μ, HasOutputChannel θ, MonadReader θ μ) ⇒ Severity → 𝕋 → μ ()
+log' sev t = asks getOutputChannel ≫ \ oc → log oc sev t
+
+--------------------
+
+warn' ∷ (MonadIO μ, HasOutputChannel α, MonadReader α μ) ⇒ 𝕋 → μ ()
+warn' = log' Warning
+
+--------------------
+
+debug' ∷ (MonadIO μ, HasOutputChannel α, MonadReader α μ) ⇒ 𝕋 → μ ()
+debug' = log' Debug
+
+------------------------------------------------------------
 --                        Context                         --
 ------------------------------------------------------------
 
@@ -239,11 +371,16 @@ data Context = Context { _cache         ∷ MVar Cache
                          -- ^ the timer for a wanIP update
                        , _childProcs    ∷ MVar (Map.Map 𝕋 ProcessHandle)
                        , _childThreads  ∷ MVar (Map.Map 𝕋 ThreadId)
-                       , _outputChannel ∷ MVar (Severity, 𝕋)
+                       , _outputChannel ∷ OutputChannel
                        , _exit          ∷ MVar Word8
                        }
 
 ----------
+
+instance HasOutputChannel Context where
+  getOutputChannel = _outputChannel
+
+--------------------
 
 newContext ∷ MonadIO μ ⇒ μ Context
 newContext = liftIO $ do
@@ -253,7 +390,7 @@ newContext = liftIO $ do
   wan_check      ← WanCheck ⊳ async (return ()) ≫ newMVar
   child_procs    ← newMVar Map.empty
   child_threads  ← newMVar Map.empty
-  output_channel ← newEmptyMVar
+  output_channel ← newOutputChannel
   let ctxt = Context { _cache         = cache
                      , _lanIPsTimer   = lan_check
                      , _wanIPTimer    = wan_check
@@ -264,17 +401,54 @@ newContext = liftIO $ do
                      }
   lanIPsTimer ctxt ⪼ return ctxt
 
+----------------------------------------
+
+cleanup ∷ Context → IO ()
+cleanup ctxt = do
+-- XXX use async for ip monitor thread?
+-- XXX terminate threads first?
+
+  debug ctxt "Cleanup: terminating child processes..."
+  -- XXX delete procs as we terminate them, and thus update the MVar
+  ps ← readMVar (_childProcs ctxt)
+  mapM_ (\ (nm,p) → do
+      pid ← getPid p
+      warn ctxt $ [fmt|terminating %t (%d)|] nm (pid ⧏ 0)
+      terminateProcess p
+      -- I don't think there's any value in waiting for the process to finish
+      -- _ <- waitForProcess ph
+      ) (Map.toList ps)
+  putMVar (_exit ctxt) 0
+  debug ctxt "cleanup complete: exiting"
+
 ------------------------------------------------------------
+
+-------------------- Process Utilities ---------------------
+
+{-| create a proc, close stdin, leave stderr in place, use the stdout pipe -}
+withStdoutProc ∷ HasOutputChannel β ⇒
+                 β → CreateProcess → (Handle → ProcessHandle → IO ()) → IO ()
+withStdoutProc ctxt create_proc action = do
+  let stdout_proc 𝓝 (𝓙 stdout) 𝓝 p = action stdout p
+      stdout_proc sin sout serr _ =
+        error ctxt $ [fmt|internal error withStdoutProc got «%w» «%w» «%w»|]
+                     sin sout serr
+  devnull ← openFile "/dev/null" ReadMode
+  let proc_ = create_proc { std_in = UseHandle devnull
+                          , std_out = CreatePipe
+                          , std_err = Inherit }
+  withCreateProcess proc_ stdout_proc
+
+--------------------- LAN IPs Handling ---------------------
 
 -- XXX check the timing in effect
 {-| call lanIPs, update the cache; if there's a change, set a timer to update
     the WanIP (unless there's no LanIPs: in which case, set the WanIP to 𝓝 -}
 updateLanIPs ∷ Context → IO ()
 updateLanIPs ctxt = readerRunT ctxt $ do
-  debug'' "updateLanIPs"
-  let cache = _cache ctxt
+  debug' "updateLanIPs"
   lan_ips ← lanIPs
-  liftIO $ modifyMVar_ cache
+  liftIO $ modifyMVar_ (_cache ctxt)
            (\ c → do
               let prev_ips = _lanIPs c
               when (lan_ips ≠ prev_ips) -- lan_ips changed
@@ -286,86 +460,91 @@ updateLanIPs ctxt = readerRunT ctxt $ do
 
 ----------------------------------------
 
-updateWanIP_ ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
-updateWanIP_ = do
-  wan_ip ← ѥ $ wanIP
-  ctxt ← ask
-  liftIO $ modifyMVar_ (_cache ctxt) $ \ c → ⵎ ctxt $
-    case wan_ip of
-      𝓛 (e ∷ IOParseError) → do
-        debug'' "updateWanIP: error: sleeping 1min"
-        warn'' (toText e)
-        updateWanIPTimer (MINS 1) ctxt ⪼ return c
-      𝓡 ip → do
-        debug'' "updateWanIP: got IP, sleeping 10mins"
-        updateWanIPTimer (SECS 10) ctxt ⪼ return (c { _wanIP = ip })
-
-
-{-| call lanIPs, update the cache -}
--- XXX update wanIP every minute after a lanIP change, until you get a real
--- result; every 10m thereafter
--- XXX single place to update _wanIP; to update _wanIPTimer
-updateWanIP ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
-updateWanIP = fireAndForget updateWanIP_
-
-----------------------------------------
-
-cacheResponse ∷ Cache → LBS.ByteString → LBS.ByteString
-cacheResponse c "lanIPs" = encode $ _lanIPs c
-cacheResponse c "wanIP"  = encode $ _wanIP  c
-cacheResponse _ _        = "Unknown request"
-
-------------------------------------------------------------
-
-cleanup ∷ Context → IO ()
-cleanup ctxt = do
--- XXX use async for ip monitor thread?
--- XXX terminate threads first?
-
-  debug' ctxt "Cleanup: terminating child processes..."
-  -- XXX delete procs as we terminate them, and thus update the MVar
-  ps ← readMVar (_childProcs ctxt)
-  mapM_ (\ (nm,p) → do
-      pid ← getPid p
-      warn' ctxt $ [fmt|terminating %t (%d)|] nm (pid ⧏ 0)
-      terminateProcess p
-      -- I don't think there's any value in waiting for the process to finish
-      -- _ <- waitForProcess ph
-      ) (Map.toList ps)
-  putMVar (_exit ctxt) 0
-  debug' ctxt "cleanup complete: exiting"
-
-----------------------------------------
-
 lanIPsTimer ∷ Context → IO LanCheck
-lanIPsTimer ctxt = LanCheck ⊳ mkTimer (SECS 1) (updateLanIPs ctxt)
+lanIPsTimer ctxt =
+  LanCheck ⊳ mkTimer (SECS 1) (updateLanIPs ctxt)
 
 ----------------------------------------
 
 ensureLanIPsTimer ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
 ensureLanIPsTimer = do
   ctxt ← ask
+  lt ← liftIO $ tryTakeMVar (_lanIPsTimer ctxt)
+  debug' $ [fmt|_lanIPsTimer %w|] (maybe "Nothing" (const "Just") lt)
   ensureMVarSet (_lanIPsTimer ctxt) lanIPsTimer ctxt
+
+----------------------------------------
+
+{-| create a sub-process watching ip monitor; whenever it emits a line, start
+    a timer to check the lan IPs (unless one is already running) -}
+lanWatcher ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
+lanWatcher = do
+  ctxt ← ask
+  debug' "lanwatcher: starting"
+  let process_ip_monitor_lines ∷ Handle → IO ()
+      process_ip_monitor_lines ipm_out = forever $ ø (ⵎ ctxt $ do
+         debug' "lanWatcher: wait for a line"
+         l ← liftIO $ hGetLine ipm_out
+         debug' "lanWatcher: got a line"
+         ensureLanIPsTimer -- ctxt
+         debug' $ [fmt|ip monitor: %s|] l)
+
+  let ipArgs    = [ "-tshort", "monitor", "address" ]
+      ipMonitor = proc (toString ipPath) ipArgs
+
+  liftIO $ withStdoutProc ctxt ipMonitor
+    (\ ipm_out p → do
+      debug ctxt "lanWatcher: created proc"
+      -- XXX ip seems to be inheriting the listener port!
+      let procName = T.intercalate " " $ "ip" : (T.pack ⊳ ipArgs)
+      modifyMVar_ (_childProcs ctxt) $ return ∘ Map.insert procName p
+      process_ip_monitor_lines ipm_out
+      warn ctxt "lanWatcher: ¡finished!"
+    )
+
+--------------------- WAN IP Handling ----------------------
+
+{-| call lanIPs, update the cache -}
+-- XXX update wanIP every minute after a lanIP change, until you get a real
+-- result; every 10m thereafter
+-- XXX single place to update _wanIP; to update _wanIPTimer
+updateWanIP ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
+updateWanIP =
+  fireAndForget updateWanIP_
+  where
+    updateWanIP_ ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
+    updateWanIP_ = do
+      wan_ip ← ѥ $ wanIP
+      ctxt ← ask
+      liftIO $ modifyMVar_ (_cache ctxt) $ \ c → ⵎ ctxt $
+        case wan_ip of
+          𝓛 (e ∷ IOParseError) → do
+            debug' "updateWanIP: error: sleeping 1min"
+            warn' (toText e)
+            updateWanIPTimer (MINS 1) ctxt ⪼ return c
+          𝓡 ip → do
+            debug' "updateWanIP: got IP, sleeping 10mins"
+            updateWanIPTimer (MINS 10) ctxt ⪼ return (c { _wanIP = ip })
 
 ----------------------------------------
 
 wanIPTimer ∷ Duration → Context → IO WanCheck
 wanIPTimer dur ctxt = do
-  debug' ctxt "wanIPTimer"
+  debug ctxt "wanIPTimer"
   WanCheck ⊳ mkTimer dur (flip runReaderT ctxt $ updateWanIP)
 
 ----------------------------------------
 
 updateWanIPTimer ∷ MonadIO μ ⇒ Duration → Context → μ ()
 updateWanIPTimer dur ctxt = liftIO $ do
-  debug' ctxt "updateWanIPTimer"
+  debug ctxt "updateWanIPTimer"
   setCancelMVar (_wanIPTimer ctxt) (wanIPTimer dur) ctxt
 
 ----------------------------------------
 
 cancelWanIPTimer ∷ Context → IO ()
 cancelWanIPTimer ctxt = do
-  debug' ctxt "cancelWanIPTimer"
+  debug ctxt "cancelWanIPTimer"
   modifyMVar_ (_wanIPTimer ctxt) cancel'
 
 ----------------------------------------
@@ -374,11 +553,6 @@ setNoWanIP ∷ Context → IO ()
 setNoWanIP ctxt = do
   cancelWanIPTimer ctxt
   modifyMVar_ (_cache ctxt) (\ c → return $ c { _wanIP = 𝓝 })
-
-------------------------------------------------------------
-
-sleep ∷ MonadIO μ ⇒ Duration → μ ()
-sleep dur = liftIO $ threadDelay (round $ dur ⊣ asMicroseconds)
 
 ----------------------------------------
 
@@ -393,112 +567,27 @@ cacheUpdater _cache = forever $ do
     sleep (SECS 10)
 -}
 
-----------------------------------------
+----------------- General Client Handling ------------------
 
-ipPath ∷ AbsFile
-ipPath = [absfile|/run/current-system/sw/bin/ip|]
-
-ipMonitor ∷ CreateProcess
-ipMonitor = proc (toString ipPath) [ "-tshort", "monitor", "address" ]
-
-----------------------------------------
-
-{-| create a proc, close stdin, leave stderr in place, use the stdout pipe -}
-withStdoutProc ∷ CreateProcess → (Handle → ProcessHandle → IO α) → IO α
-withStdoutProc create_proc action = do
-  let stdout_proc 𝓝 (𝓙 stdout) 𝓝 p = action stdout p
-      stdout_proc sin sout serr _ =
-        error $ [fmt|internal error withStdoutProc got «%w» «%w» «%w»|]
-                sin sout serr
-  devnull ← openFile "/dev/null" ReadMode
-  let proc_ = create_proc { std_in = UseHandle devnull
-                          , std_out = CreatePipe
-                          , std_err = Inherit }
-  withCreateProcess proc_ stdout_proc
-
-----------------------------------------
-
-{-| create a sub-process watching ip monitor; whenever it emits a line, start
-    a timer to check the lan IPs (unless one is already running) -}
--- lanWatcher ∷ Context → IO ()
-lanWatcher ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
-lanWatcher = do
-  ctxt ← ask
-  debug'' "lanwatcher: starting"
-  let process_ip_monitor_lines ∷ Handle → IO ()
-      process_ip_monitor_lines ipm_out = forever $ ø (ⵎ ctxt $ do
-         l ← liftIO $ hGetLine ipm_out
-         ensureLanIPsTimer -- ctxt
-         debug'' $ [fmt|ip monitor: %s|] l)
-
-  liftIO $ withStdoutProc ipMonitor
-    (\ ipm_out p → do
-      debug' ctxt "lanWatcher: created proc"
-      -- XXX ip seems to be inheriting the listener port!
-      modifyMVar_ (_childProcs ctxt) $ return ∘ Map.insert "ip monitor address -tshort" p
-      process_ip_monitor_lines ipm_out
-      warn' ctxt "lanWatcher: all done"
-    )
-
-----------------------------------------
-
-class HasContext α where
-  getContext ∷ α → Context
-
-instance HasContext Context where
-  getContext = id
-
-instance HasContext (Context,β) where
-  getContext = fst
-
-log ∷ MonadIO μ ⇒ Context → Severity → 𝕋 → μ ()
-log ctxt sev t = liftIO $ do
-  let removePrefix ∷ 𝕊 → 𝕊 → 𝕊
-      removePrefix prefix str
-        | prefix `isPrefixOf` str = drop_ (len_ prefix) str
-        | otherwise = str
-  tid ← (removePrefix "ThreadId " ∘ show) ⊳ myThreadId
-  putMVar (_outputChannel ctxt) ∘ (sev,) $ ([fmt|«%05s» |] tid ◇ t)
-
-log' ∷ (MonadIO μ, HasContext θ, MonadReader θ μ) ⇒ Severity → 𝕋 → μ ()
-log' sev t = asks getContext ≫ \ ctxt → log ctxt sev t
-
-debug' ∷ MonadIO μ ⇒ Context → 𝕋 → μ ()
-debug' ctxt = log ctxt Debug
-
-error' ∷ MonadIO μ ⇒ Context → 𝕋 → μ ()
-error' ctxt = log ctxt Error
-
-debug'' ∷ (MonadIO μ, MonadReader Context μ) ⇒ 𝕋 → μ ()
-debug'' = log' Debug
-
-warn'' ∷ (MonadIO μ, MonadReader Context μ) ⇒ 𝕋 → μ ()
-warn'' = log' Warning
-
-warn' ∷ MonadIO μ ⇒ Context → 𝕋 → μ ()
-warn' ctxt = log ctxt Warning
-
-
--- Function to handle client requests
 handleClient ∷ (MonadIO μ, MonadReader Context μ) ⇒ Socket → μ ()
 handleClient sock = do
-  cache ← asks _cache
   peer_name ← liftIO $ getPeerName sock
-  debug'' $ [fmt|new connection: %w|] peer_name
-  -- We use Handle for easier IO
+  debug' $ [fmt|new connection: %w|] peer_name
   handle ← liftIO $ socketToHandle sock ReadWriteMode
   liftIO $ hSetBuffering handle NoBuffering
-  -- Read command
   command ← liftIO $ fromString ⊳ hGetLine handle
-  -- Get cache and respond
+  cache ← asks _cache
   response ← liftIO $ readMVar cache ⊲ (flip cacheResponse) command
   liftIO $ LBS.hPutStr handle (response ◇ "\n")
-  debug'' $ [fmt|done with connection: %w|] peer_name
+  debug' $ [fmt|done with connection: %w|] peer_name
   liftIO $ hClose handle
 
-----------------------------------------
+--------------------- Options Handling ---------------------
+
 
 data Options = Options { _port ∷ PortNumber }
+
+--------------------
 
 parseOptions ∷ Parser Options
 parseOptions = Options ⊳ option auto (ю [ long "port", short 'p'
@@ -508,6 +597,8 @@ parseOptions = Options ⊳ option auto (ю [ long "port", short 'p'
                                         , value 3000
                                         ])
 
+--------------------------- main ---------------------------
+
 socket ∷ MonadIO μ ⇒ PortNumber → μ Socket
 socket port = liftIO $ do
   sock ← Network.Socket.socket AF_INET Stream 0
@@ -515,29 +606,13 @@ socket port = liftIO $ do
   Network.Socket.listen sock 5
   return sock
 
-installCtrlCHandler ∷ MonadIO μ ⇒ Context → μ Handler
-installCtrlCHandler ctxt =
-  liftIO $ installHandler keyboardSignal (Catch (cleanup ctxt)) 𝓝
-
-readerRunT ∷ β → ReaderT β η α → η α
-readerRunT = flip runReaderT
-
--- U2d4e -- Tifinagh letter yam
-ⵎ ∷ ∀ α η . Context → ReaderT (Context) η α → η α
-ⵎ = readerRunT
-
-fireAndForget' ∷ MonadIO μ ⇒ Context → ReaderT Context IO () → μ ()
-fireAndForget' ctxt io = ø $ async $ catch (runReaderT io ctxt) (\ (e ∷ SomeException) → error' ctxt $ [fmt|Error in thread: %s|] $ displayException e)
-
-fireAndForget ∷ (MonadIO μ, MonadReader Context μ) ⇒
-                 ReaderT Context IO () → μ ()
-fireAndForget io = ask ≫ \ ctxt → fireAndForget' ctxt io
+----------------------------------------
 
 acceptor ∷ (MonadIO μ, MonadReader Context μ) ⇒ Socket → μ ThreadId
 acceptor sock = do
   ctxt ← ask
   port ← liftIO $ socketPort sock
-  warn'' $ [fmt|listening on port %d|] port
+  warn' $ [fmt|listening on port %d|] port
 
   liftIO $ forkIO $ forever $ do
     (conn, _addr) ← accept sock
@@ -545,9 +620,11 @@ acceptor sock = do
     -- handle each connection in a separate thread
     flip runReaderT ctxt $ fireAndForget (handleClient conn)
 
-forks ∷ MonadIO μ ⇒ β → NonEmpty (ReaderT β IO ()) → μ ()
-forks ctxt =
-  ø ∘ forkIO ∘ runConcurrently ∘ sconcat ∘ fmap (Concurrently ∘ readerRunT ctxt)
+----------------------------------------
+
+installCtrlCHandler ∷ MonadIO μ ⇒ Context → μ Handler
+installCtrlCHandler ctxt =
+  liftIO $ installHandler keyboardSignal (Catch (cleanup ctxt)) 𝓝
 
 -- XXX use logging warn/info/debug
 main ∷ IO ()
@@ -563,7 +640,8 @@ main = let desc ∷ 𝕋 = "monitor & report some facts to interested callers"
                -- this has to run at the top level, to benefit from the StdMain
                -- log instance
                forever $ do
-                 liftIO (takeMVar (_outputChannel ctxt)) ≫ uncurry logIOT
+                 writeOutput (_outputChannel ctxt)
+                 -- liftIO (takeMVar (_outputChannel ctxt)) ≫ uncurry logIOT
                  liftIO (tryTakeMVar (_exit ctxt)) ≫ \ case
                    𝓝 → return ()
                    𝓙 e → ø $ exitWith e
