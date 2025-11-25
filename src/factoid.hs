@@ -175,14 +175,23 @@ readerRunT = flip runReaderT
 {-| fire off a number concurrent threads (each a MonadReader) -}
 forks ∷ MonadIO μ ⇒ β → NonEmpty (ReaderT β IO ()) → μ ()
 forks ctxt =
---  ø ∘ forkIO ∘ runConcurrently ∘ sconcat ∘ fmap (Concurrently ∘ readerRunT ctxt)
   ø ∘ async ∘ runConcurrently ∘ sconcat ∘ fmap (Concurrently ∘ readerRunT ctxt)
 
 ----------------------------------------
 
 {-| run some IO (that is an OutputChannel Reader) in a thread, without ever
     collecting -}
-fireAndForget' ∷ (MonadIO μ, HasOutputChannel α) ⇒ α → ReaderT α IO () → μ ()
+fireAndForget'' ∷ (MonadIO μ) ⇒ IO () → μ ()
+fireAndForget'' io =
+  let displaySomeException = displayException @SomeException
+      catchE e = error $ [fmt|Error in thread: %s|] $ displaySomeException e
+  in ø $ async $ catch io catchE
+
+--------------------
+
+{-| run some IO (that is a ReaderT) in a thread, without ever
+    collecting -}
+fireAndForget' ∷ (MonadIO μ) ⇒ α → ReaderT α IO () → μ ()
 fireAndForget' oc io =
   let displaySomeException = displayException @SomeException
       catchE e = error $ [fmt|Error in thread: %s|] $ displaySomeException e
@@ -190,10 +199,9 @@ fireAndForget' oc io =
 
 --------------------
 
-{-| run some IO (that is an OutputChannel Reader) in a thread, without ever
+{-| run some IO (that is a ReaderT) in a thread, without ever
     collecting (suitable for an OutputChannel Reader context) -}
-fireAndForget ∷ (MonadIO μ, HasOutputChannel α, MonadReader α μ) ⇒
-                ReaderT α IO () → μ ()
+fireAndForget ∷ (MonadIO μ, MonadReader α μ) ⇒ ReaderT α IO () → μ ()
 fireAndForget io = ask ≫ \ oc → fireAndForget' oc io
 
 ------------------------------------------------------------
@@ -277,7 +285,7 @@ data TimeStamped α = TimeStamped { _lastChecked ∷ 𝕄 UTCTime
 ----------
 
 instance (ToJSON α, Show α) ⇒ ToJSON (TimeStamped α) where
-  toJSON t = traceShow ("toJSON", show t) $ {- let rs = [ "value" .= _value t ]
+  toJSON t = traceShow ("toJSON"∷𝕊, show t) $ {- let rs = [ "value" .= _value t ]
              in  case _lastChecked t of
                    𝓝 → object rs
                    𝓙 ts → let ṙṡ = ("last-checked" .= ts) : rs
@@ -564,7 +572,7 @@ updateWanIP =
     updateWanIP_ = do
       wan_ip ← ѥ $ wanIP
       ctxt ← ask
-      liftIO $ modifyMVar_ (_cache ctxt) $ \ c → ⵎ ctxt $
+      liftIO $ modifyMVar_ (_cache ctxt) $ \ c →
         case wan_ip of
           𝓛 (e ∷ IOParseError) → do
             debug "updateWanIP: error: sleeping 1min"
