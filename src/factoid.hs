@@ -167,7 +167,7 @@ readerRunT = flip runReaderT
 --------------------
 
 -- U2d4e -- Tifinagh letter yam
-ⵎ ∷ ∀ α β η . HasOutputChannel β ⇒ β → ReaderT β η α → η α
+ⵎ ∷ ∀ α β η . β → ReaderT β η α → η α
 ⵎ = readerRunT
 
 ----------------------------------------
@@ -178,14 +178,6 @@ forks ctxt =
   ø ∘ async ∘ runConcurrently ∘ sconcat ∘ fmap (Concurrently ∘ readerRunT ctxt)
 
 ----------------------------------------
-
-{-| run some IO (that is an OutputChannel Reader) in a thread, without ever
-    collecting -}
-fireAndForget'' ∷ (MonadIO μ) ⇒ IO () → μ ()
-fireAndForget'' io =
-  let displaySomeException = displayException @SomeException
-      catchE e = error $ [fmt|Error in thread: %s|] $ displaySomeException e
-  in ø $ async $ catch io catchE
 
 --------------------
 
@@ -378,18 +370,6 @@ globalOutput ∷ OutputChannel
 globalOutput = unsafePerformIO $ newOutputChannel
 
 ----------------------------------------
---          HasOutputChannel          --
-----------------------------------------
-
-class HasOutputChannel α where
-  getOutputChannel ∷ α → OutputChannel
-
-----------
-
-instance HasOutputChannel OutputChannel where
-  getOutputChannel = id
-
-----------------------------------------
 
 log ∷ MonadIO μ ⇒ Severity → 𝕋 → μ ()
 log sev t = liftIO $ do
@@ -433,11 +413,6 @@ data Context = Context { _cache         ∷ MVar Cache
                        , _outputChannel ∷ OutputChannel
                        , _exit          ∷ MVar Word8
                        }
-
-----------
-
-instance HasOutputChannel Context where
-  getOutputChannel = _outputChannel
 
 --------------------
 
@@ -542,7 +517,7 @@ lanWatcher = do
          debug "lanWatcher: wait for a line"
          l ← liftIO $ hGetLine ipm_out
          debug "lanWatcher: got a line"
-         ensureLanIPsTimer -- ctxt
+         ensureLanIPsTimer
          debug $ [fmt|ip monitor: %s|] l)
 
   let ipArgs    = [ "-tshort", "monitor", "address" ]
