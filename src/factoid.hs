@@ -364,6 +364,8 @@ output (OutputChannel mv) sv t = liftIO $ putMVar mv (sv,t)
 writeOutput ∷ (MonadIO μ, MonadLog (Log ω) μ, Default ω) ⇒ OutputChannel → μ ()
 writeOutput (OutputChannel mv) = liftIO (takeMVar mv) ≫ uncurry logIOT
 
+----------------------------------------
+
 globalOutput ∷ OutputChannel
 globalOutput = unsafePerformIO $ newOutputChannel
 
@@ -405,15 +407,6 @@ warn = log Warning
 debug ∷ MonadIO μ ⇒ 𝕋 → μ ()
 debug = log Debug
 
-----------------------------------------
-
-warn' ∷ (MonadIO μ, HasOutputChannel α, MonadReader α μ) ⇒ 𝕋 → μ ()
-warn' = log Warning
-
---------------------
-
-debug' ∷ (MonadIO μ, HasOutputChannel α, MonadReader α μ) ⇒ 𝕋 → μ ()
-debug' = log Debug
 
 ------------------------------------------------------------
 --                        Context                         --
@@ -504,7 +497,7 @@ withStdoutProc ctxt create_proc action = do
     the WanIP (unless there's no LanIPs: in which case, set the WanIP to 𝓝 -}
 updateLanIPs ∷ Context → IO ()
 updateLanIPs ctxt = readerRunT ctxt $ do
-  debug' "updateLanIPs"
+  debug "updateLanIPs"
   lan_ips ← lanIPs
   liftIO $ modifyMVar_ (_cache ctxt)
            (\ c → do
@@ -536,14 +529,14 @@ ensureLanIPsTimer = do
 lanWatcher ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
 lanWatcher = do
   ctxt ← ask
-  debug' "lanwatcher: starting"
+  debug "lanwatcher: starting"
   let process_ip_monitor_lines ∷ Handle → IO ()
       process_ip_monitor_lines ipm_out = forever $ ø (ⵎ ctxt $ do
-         debug' "lanWatcher: wait for a line"
+         debug "lanWatcher: wait for a line"
          l ← liftIO $ hGetLine ipm_out
-         debug' "lanWatcher: got a line"
+         debug "lanWatcher: got a line"
          ensureLanIPsTimer -- ctxt
-         debug' $ [fmt|ip monitor: %s|] l)
+         debug $ [fmt|ip monitor: %s|] l)
 
   let ipArgs    = [ "-tshort", "monitor", "address" ]
       ipMonitor = proc (toString ipPath) ipArgs
@@ -575,13 +568,13 @@ updateWanIP =
       liftIO $ modifyMVar_ (_cache ctxt) $ \ c → ⵎ ctxt $
         case wan_ip of
           𝓛 (e ∷ IOParseError) → do
-            debug' "updateWanIP: error: sleeping 1min"
-            warn' (toText e)
+            debug "updateWanIP: error: sleeping 1min"
+            warn (toText e)
             updateWanIPTimer (MINS 1) ctxt ⪼ return c
           𝓡 ip → do
-            debug' "updateWanIP: got IP, sleeping 10mins"
+            debug "updateWanIP: got IP, sleeping 10mins"
             updateWanIPTimer (MINS 10) ctxt
-            debug' $ [fmt|updateWanIP: returning %w|] ip
+            debug $ [fmt|updateWanIP: returning %w|] ip
             return (c { _wanIP = ip })
 
 ----------------------------------------
@@ -630,13 +623,13 @@ cacheUpdater _cache = forever $ do
 handleClient ∷ (MonadIO μ, MonadReader Context μ) ⇒ Socket → μ ()
 handleClient sock = do
   peer_name ← liftIO $ getPeerName sock
-  debug' $ [fmt|new connection: %w|] peer_name
+  debug $ [fmt|new connection: %w|] peer_name
   handle ← liftIO $ socketToHandle sock ReadWriteMode
   liftIO $ hSetBuffering handle NoBuffering
   command ← liftIO $ fromString ⊳ hGetLine handle
-  debug' $ [fmt|requesting cache for: %w|] peer_name
+  debug $ [fmt|requesting cache for: %w|] peer_name
   cache ← asks _cache
-  debug' $ [fmt|formatting response for: %w|] peer_name
+  debug $ [fmt|formatting response for: %w|] peer_name
   ctxt ← ask
   liftIO $ do
     debug "bart"
@@ -655,9 +648,9 @@ handleClient sock = do
     return x
     debug "apu"
     readMVar cache ⊲ (flip cacheResponse) command
-  debug' $ [fmt|responding to: %w|] peer_name
+  debug $ [fmt|responding to: %w|] peer_name
   liftIO $ LBS.hPutStr handle (response ◇ "\n")
-  debug' $ [fmt|done with connection: %w|] peer_name
+  debug $ [fmt|done with connection: %w|] peer_name
   liftIO $ hClose handle
 
 --------------------- Options Handling ---------------------
@@ -690,7 +683,7 @@ acceptor ∷ (MonadIO μ, MonadReader Context μ) ⇒ Socket → μ ThreadId
 acceptor sock = do
   ctxt ← ask
   port ← liftIO $ socketPort sock
-  warn' $ [fmt|listening on port %d|] port
+  warn $ [fmt|listening on port %d|] port
 
   liftIO $ forkIO $ forever $ do
     (conn, _addr) ← accept sock
