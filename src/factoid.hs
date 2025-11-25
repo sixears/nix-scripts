@@ -477,9 +477,8 @@ cleanup ctxt = do
 -------------------- Process Utilities ---------------------
 
 {-| create a proc, close stdin, leave stderr in place, use the stdout pipe -}
-withStdoutProc ∷ HasOutputChannel β ⇒
-                 β → CreateProcess → (Handle → ProcessHandle → IO ()) → IO ()
-withStdoutProc ctxt create_proc action = do
+withStdoutProc ∷ CreateProcess → (Handle → ProcessHandle → IO ()) → IO ()
+withStdoutProc create_proc action = do
   let stdout_proc 𝓝 (𝓙 stdout) 𝓝 p = action stdout p
       stdout_proc sin sout serr _ =
         error $ [fmt|internal error withStdoutProc got «%w» «%w» «%w»|]
@@ -541,7 +540,7 @@ lanWatcher = do
   let ipArgs    = [ "-tshort", "monitor", "address" ]
       ipMonitor = proc (toString ipPath) ipArgs
 
-  liftIO $ withStdoutProc ctxt ipMonitor
+  liftIO $ withStdoutProc ipMonitor
     (\ ipm_out p → do
       debug "lanWatcher: created proc"
       -- XXX ip seems to be inheriting the listener port!
@@ -630,7 +629,6 @@ handleClient sock = do
   debug $ [fmt|requesting cache for: %w|] peer_name
   cache ← asks _cache
   debug $ [fmt|formatting response for: %w|] peer_name
-  ctxt ← ask
   liftIO $ do
     debug "bart"
     withMVar cache $ \ c → do
