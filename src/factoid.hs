@@ -5,8 +5,8 @@
 {-# LANGUAGE QuasiQuotes            #-}
 {-# LANGUAGE UnicodeSyntax          #-}
 
--- XXX locks up when we try to print LanIPs with timings.
--- XXX simplify output / context with evil global variable
+-- XXX lanIPs stops responding after wifi off :-(
+-- XXX notably, it doesn't read another ip monitor line after the Deleted
 
 import Base1
 import Prelude  ( round )
@@ -31,10 +31,11 @@ import Control.Concurrent.MVar  qualified as  MVar
 import Control.Concurrent       ( ThreadId, forkIO, myThreadId, newEmptyMVar,
                                   putMVar,takeMVar, threadDelay)
 import Control.Concurrent.MVar  ( MVar, readMVar, modifyMVar_, newMVar,
-                                  tryPutMVar, tryTakeMVar, withMVar )
+                                  tryPutMVar, tryReadMVar, tryTakeMVar, withMVar )
 import Control.Exception        ( SomeException, catch, displayException )
 import Control.Monad            ( forever )
 import Data.List                ( isPrefixOf )
+import Data.Maybe               ( isJust )
 import Data.Semigroup           ( sconcat )
 import Data.String              ( fromString )
 import Data.Tuple               ( uncurry )
@@ -235,15 +236,19 @@ setCancelMVar mv mk x = liftIO $ modifyMVar_ mv $ \ c → cancel c ⪼ mk x
 -- β is typically Context
 ensureMVarSet ∷ (MonadIO μ, Pollable α γ) ⇒ MVar α → (β → IO α) → β → μ ()
 ensureMVarSet mv mk x = do
-  liftIO (tryTakeMVar mv) ≫ \ case
+  liftIO (tryReadMVar mv) ≫ \ case
     𝓝 → ø $ (mk x) ≫ tryPutMVar mv
-    𝓙 _ → liftIO $ modifyMVar_ mv $ \ l → poll l ≫ maybe (mk x) (const $ return l)
+    𝓙 _ → liftIO $ modifyMVar_ mv $ \ l → poll l ≫ maybe (mk x) (const$ return l)
 
 ------------------------------------------------------------
 --                        LanCheck                        --
 ------------------------------------------------------------
 
 newtype LanCheck = LanCheck (Async ())
+
+----------
+
+instance Show LanCheck where show _ = "LanCheck"
 
 ----------
 
@@ -277,14 +282,14 @@ data TimeStamped α = TimeStamped { _lastChecked ∷ 𝕄 UTCTime
 ----------
 
 instance (ToJSON α, Show α) ⇒ ToJSON (TimeStamped α) where
-  toJSON t = traceShow ("toJSON"∷𝕊, show t) $ {- let rs = [ "value" .= _value t ]
+  toJSON t = let rs = [ "value" .= _value t ]
              in  case _lastChecked t of
                    𝓝 → object rs
                    𝓙 ts → let ṙṡ = ("last-checked" .= ts) : rs
                           in  case _lastChanged t of
                                 𝓝    → object ṙṡ
                                 𝓙 ṫṡ → let ṛṣ = ("last-changed" .= ṫṡ) : ṙṡ
-                                       in  object ṛṣ -} String "TS"
+                                       in  object ṛṣ
 
 --------------------
 
@@ -294,17 +299,26 @@ newTS a = TimeStamped 𝓝 𝓝 a
 tsValue ∷ TimeStamped α → α
 tsValue (TimeStamped _ _ a) = a
 
-tsUpdate ∷ (MonadIO μ, Eq α) ⇒ TimeStamped α → α → μ (TimeStamped α)
+tsUpdate ∷ (MonadIO μ, Eq α, Show α) ⇒ TimeStamped α → α → μ (TimeStamped α)
 tsUpdate (TimeStamped _ c a) a' = liftIO $ do
   now ← getCurrentTime
+  debug $ [fmt|tsUpdate> current time %z|] now
 -- XXX this causes lockup!
-{-
+
   let c' = case c of
-             𝓝 → c'
+             𝓝 → now
              𝓙 ĉ → if a ≡ a' then ĉ else now
-  return $ TimeStamped (𝓙 now) (𝓙 c') a'
--}
-  return $ TimeStamped 𝓝 𝓝 a'
+
+  debug $ [fmt|tsUpdate! current time %z|] now
+  y ← return $ TimeStamped (𝓙 now) (𝓙 c') a'
+
+  debug $ [fmt|tsUpdate< current time %z|] now
+  x ← return $ TimeStamped 𝓝 𝓝 a'
+  debug $ [fmt|tsUpdate¡ current time %z|] now
+  -- returning y here rather than x causes a lockup.  New connections
+  -- are handled, but no connection actually receives a response
+  debug $ [fmt|tsUpdate» y: %w|] y -- LOCKS UP
+  return y
 
 ------------------------------------------------------------
 --                          Cache                         --
