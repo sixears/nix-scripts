@@ -661,23 +661,8 @@ handleClient sock = do
   ctxt ← ask
   cache ← asks _cache
   debug $ [fmt|formatting response for: %w|] peer_name
-  liftIO $ do
-    debug "bart"
-    withMVar cache $ \ c → do
-      debug "maggie"
-      debug $ [fmt|cache: %w|] c
-      debug "homer"
-    debug "lisa"
   response ← liftIO $ do
-    debug "marge"
-    -- x ← readMVar cache ⊲ (flip cacheResponse) command
-    c ← readMVar cache
-    debug "santa's little helper"
-    x ← cacheResponse ctxt command
-    debug "grandpa"
-    return x
---    debug "apu"
---    readMVar cache ⊲ (flip cacheResponse) command
+    cacheResponse ctxt command
   debug $ [fmt|responding to: %w|] peer_name
   liftIO $ LBS.hPutStr handle (response ◇ "\n")
   debug $ [fmt|done with connection: %w|] peer_name
