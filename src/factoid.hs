@@ -5,8 +5,10 @@
 {-# LANGUAGE QuasiQuotes            #-}
 {-# LANGUAGE UnicodeSyntax          #-}
 
--- XXX lanIPs stops responding after wifi off :-(
--- XXX notably, it doesn't read another ip monitor line after the Deleted
+-- XXX add a 'queue' option to re-run ip timer again; currently, we don't see
+-- XXX IPs after `wifi on`; I think the update is getting subsumed by ensureMVar
+
+-- XXX eliminate `-- β is typically Context` from setCancelMVar
 
 import Base1
 import Prelude  ( round )
@@ -232,19 +234,29 @@ setCancelMVar mv mk x = liftIO $ modifyMVar_ mv $ \ c → cancel c ⪼ mk x
 
 {-| If a Pollable is running, leave it alone; but if it has terminated, then
     create a new one.  Note that this will block if the MVar is empty.
+
+    `update` allows for an update to the MVar value if it polls (and therefore
+    a new one isn't created).
 -}
--- β is typically Context
-ensureMVarSet ∷ (MonadIO μ, Pollable α γ) ⇒ MVar α → (β → IO α) → β → μ ()
-ensureMVarSet mv mk x = do
-  liftIO (tryReadMVar mv) ≫ \ case
-    𝓝 → ø $ (mk x) ≫ tryPutMVar mv
-    𝓙 _ → liftIO $ modifyMVar_ mv $ \ l → poll l ≫ maybe (mk x) (const$ return l)
+
+ensureMVarSet ∷ (MonadIO μ, Pollable α γ) ⇒ MVar α → IO α → (α → IO α) → μ ()
+ensureMVarSet mvar mkMVar update = do
+  liftIO (tryReadMVar mvar) ≫ \ case
+    𝓝 → debug "ensureMVarSet: nothing" ⪼ (ø $ mkMVar ≫ tryPutMVar mvar)
+    𝓙 _ → liftIO $ modifyMVar_ mvar $ \ l →
+            poll l ≫ \ case
+              𝓝   → -- async not completed
+                     debug "ensureMVarSet: update" ⪼ update l
+              𝓙 _ → -- some result; async has completed: make a new one
+                     debug "ensureMVarSet: no poll" ⪼ mkMVar
 
 ------------------------------------------------------------
 --                        LanCheck                        --
 ------------------------------------------------------------
 
-newtype LanCheck = LanCheck (Async ())
+-- the Async() is a possible timer/action (poll to see if it's done).
+-- the 𝕄 Duration is "when this timer is done: do another (with that duration"
+data LanCheck = LanCheck (Async ())
 
 ----------
 
@@ -346,16 +358,10 @@ cacheLanIPs = tsValue ∘ _lanIPs
 
 updateCacheLanIPs ∷ MonadIO μ ⇒ Cache → [IP4] → μ Cache
 updateCacheLanIPs c ip4s' = do
+  debug $ [fmt|updateCacheLanIPs: %w|] ip4s'
   let ip4s = _lanIPs c
   ip4sUp ← tsUpdate ip4s ip4s'
   return c { _lanIPs = ip4sUp }
-
-----------------------------------------
-
-cacheResponse ∷ Cache → LBS.ByteString → LBS.ByteString
-cacheResponse c "lanIPs" = encode $ _lanIPs c
-cacheResponse c "wanIP"  = encode $ _wanIP  c
-cacheResponse _ _        = "Unknown request"
 
 ------------------------------------------------------------
 --                     OutputChannel                      --
@@ -420,6 +426,9 @@ data Context = Context { _cache         ∷ MVar Cache
                        -- modify it if it's empty
                        , _lanIPsTimer   ∷ MVar LanCheck
                          -- ^ the timer for a lanIPs update
+                       , _lanCheckQueue ∷ MVar 𝔹
+                         -- ^ if set, queue another lan check after the one
+                         --   is executed
                        , _wanIPTimer    ∷ MVar WanCheck
                          -- ^ the timer for a wanIP update
                        , _childProcs    ∷ MVar (Map.Map 𝕋 ProcessHandle)
@@ -432,15 +441,17 @@ data Context = Context { _cache         ∷ MVar Cache
 
 newContext ∷ MonadIO μ ⇒ μ Context
 newContext = liftIO $ do
-  cache          ← newCache
-  exit           ← newEmptyMVar
-  lan_check      ← newEmptyMVar
-  wan_check      ← WanCheck ⊳ async (return ()) ≫ newMVar
-  child_procs    ← newMVar Map.empty
-  child_threads  ← newMVar Map.empty
+  cache           ← newCache
+  exit            ← newEmptyMVar
+  lan_check       ← newEmptyMVar
+  wan_check       ← WanCheck ⊳ async (return ()) ≫ newMVar
+  child_procs     ← newMVar Map.empty
+  child_threads   ← newMVar Map.empty
+  lan_check_queue ← newMVar 𝓕
 --  output_channel ← newOutputChannel
   let ctxt = Context { _cache         = cache
                      , _lanIPsTimer   = lan_check
+                     , _lanCheckQueue = lan_check_queue
                      , _wanIPTimer    = wan_check
                      , _childProcs    = child_procs
                      , _childThreads  = child_threads
@@ -448,6 +459,14 @@ newContext = liftIO $ do
                      , _outputChannel = globalOutput -- output_channel
                      }
   lanIPsTimer ctxt ⪼ return ctxt
+
+----------------------------------------
+
+cacheResponse ∷ MonadIO μ ⇒ Context → LBS.ByteString → μ LBS.ByteString
+cacheResponse ctxt "updateLanIPs" = liftIO $ updateLanIPs ctxt ⪼ return "OK"
+cacheResponse ctxt "lanIPs" = encode ∘ _lanIPs ⊳ liftIO (readMVar (_cache ctxt))
+cacheResponse ctxt "wanIP"  = encode ∘ _wanIP ⊳ liftIO (readMVar (_cache ctxt))
+cacheResponse _ _        = return "Unknown request"
 
 ----------------------------------------
 
@@ -498,12 +517,18 @@ updateLanIPs ctxt = readerRunT ctxt $ do
   liftIO $ modifyMVar_ (_cache ctxt)
            (\ c → do
               let prev_ips = cacheLanIPs c
+              debug $ [fmt|updateLanIPs: %w|] (lan_ips ≠ prev_ips)
               when (lan_ips ≠ prev_ips) -- lan_ips changed
                    (case lan_ips of
-                     []  → setNoWanIP ctxt                 -- no lan, no wan
+                     []  → ø $ setNoWanIP ctxt c           -- no lan, no wan
                      _xs → updateWanIPTimer (SECS 5) ctxt) -- new lan, check wan
               updateCacheLanIPs c lan_ips
            )
+  liftIO $ modifyMVar_ (_lanCheckQueue ctxt) $ \ case
+    𝓕 → debug "updateLanIPs: nothing doing" ⪼ return 𝓕
+    𝓣 → debug "updateLanIPs: new timer" ⪼  readerRunT ctxt ensureLanIPsTimer ⪼ return 𝓕
+
+
 
 ----------------------------------------
 
@@ -516,7 +541,13 @@ lanIPsTimer ctxt =
 ensureLanIPsTimer ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
 ensureLanIPsTimer = do
   ctxt ← ask
-  ensureMVarSet (_lanIPsTimer ctxt) lanIPsTimer ctxt
+  -- XXX this SECS 1 should be unified with other SECS 1
+  -- XXX use a LanCheck function rather than re-constructing it
+  ensureMVarSet (_lanIPsTimer ctxt) (lanIPsTimer ctxt)
+                (\ l → do -- if there's already a check pending, signal to run
+                          -- another straight after
+                    modifyMVar_ (_lanCheckQueue ctxt) (const $ return 𝓣)
+                    return l)
 
 ----------------------------------------
 
@@ -577,7 +608,7 @@ updateWanIP =
 
 wanIPTimer ∷ Duration → Context → IO WanCheck
 wanIPTimer dur ctxt = do
-  debug "wanIPTimer"
+  debug $ [fmt|wanIPTimer %T|] dur
   WanCheck ⊳ mkTimer dur (flip runReaderT ctxt $ updateWanIP)
 
 ----------------------------------------
@@ -596,10 +627,13 @@ cancelWanIPTimer ctxt = do
 
 ----------------------------------------
 
-setNoWanIP ∷ Context → IO ()
-setNoWanIP ctxt = do
+-- we take a Cache here in addition to the Context because the caller
+-- should already have grabbed the lock on the cache (i.e., within a modifyMVar_
+-- or similar
+setNoWanIP ∷ Context → Cache → IO Cache
+setNoWanIP ctxt cache = do
   cancelWanIPTimer ctxt
-  modifyMVar_ (_cache ctxt) (\ c → return $ c { _wanIP = 𝓝 })
+  return $ cache { _wanIP = 𝓝 }
 
 ----------------------------------------
 
@@ -624,6 +658,7 @@ handleClient sock = do
   liftIO $ hSetBuffering handle NoBuffering
   command ← liftIO $ fromString ⊳ hGetLine handle
   debug $ [fmt|requesting cache for: %w|] peer_name
+  ctxt ← ask
   cache ← asks _cache
   debug $ [fmt|formatting response for: %w|] peer_name
   liftIO $ do
@@ -638,11 +673,11 @@ handleClient sock = do
     -- x ← readMVar cache ⊲ (flip cacheResponse) command
     c ← readMVar cache
     debug "santa's little helper"
-    let x = cacheResponse c command
+    x ← cacheResponse ctxt command
     debug "grandpa"
     return x
-    debug "apu"
-    readMVar cache ⊲ (flip cacheResponse) command
+--    debug "apu"
+--    readMVar cache ⊲ (flip cacheResponse) command
   debug $ [fmt|responding to: %w|] peer_name
   liftIO $ LBS.hPutStr handle (response ◇ "\n")
   debug $ [fmt|done with connection: %w|] peer_name
