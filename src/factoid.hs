@@ -240,13 +240,11 @@ setCancelMVar mv mk x = liftIO $ modifyMVar_ mv $ \ c → cancel c ⪼ mk x
 ensureMVarSet ∷ (MonadIO μ, Pollable α γ) ⇒ MVar α → IO α → (α → IO α) → μ ()
 ensureMVarSet mvar mkMVar update = do
   liftIO (tryReadMVar mvar) ≫ \ case
-    𝓝 → debug "ensureMVarSet: nothing" ⪼ (ø $ mkMVar ≫ tryPutMVar mvar)
+    𝓝 → ø $ mkMVar ≫ tryPutMVar mvar
     𝓙 _ → liftIO $ modifyMVar_ mvar $ \ l →
             poll l ≫ \ case
-              𝓝   → -- async not completed
-                     debug "ensureMVarSet: update" ⪼ update l
-              𝓙 _ → -- some result; async has completed: make a new one
-                     debug "ensureMVarSet: no poll" ⪼ mkMVar
+              𝓝   → update l -- async not completed
+              𝓙 _ → mkMVar -- some result; async has completed: make a new one
 
 ------------------------------------------------------------
 --                        LanCheck                        --
@@ -288,6 +286,8 @@ data TimeStamped α = TimeStamped { _lastChecked ∷ 𝕄 UTCTime
 ----------
 
 instance (ToJSON α, Show α) ⇒ ToJSON (TimeStamped α) where
+  -- XXX add a newtype UTC with toJSON to write as seconds (incl. precision)
+  --     in addition to human-readable?
   toJSON =
     let hyphenate (c:cs) | isUpper c = '-' : toLower c : hyphenate cs
                          | otherwise = c : hyphenate cs
