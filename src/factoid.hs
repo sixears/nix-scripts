@@ -5,18 +5,17 @@
 {-# LANGUAGE QuasiQuotes            #-}
 {-# LANGUAGE UnicodeSyntax          #-}
 
--- XXX add a 'queue' option to re-run ip timer again; currently, we don't see
--- XXX IPs after `wifi on`; I think the update is getting subsumed by ensureMVar
-
 -- XXX eliminate `-- β is typically Context` from setCancelMVar
+-- XXX add updateWanIP call
+-- XXX add timestamp to WanIP
 
 import Base1
 import Prelude  ( round )
-import Debug.Trace  ( traceShow )
 
 -- aeson -------------------------------
 
-import Data.Aeson  ( ToJSON( toJSON ), Value( String ), (.=), encode, object )
+import Data.Aeson  ( ToJSON( toJSON ), defaultOptions, encode
+                   , fieldLabelModifier, genericToJSON, omitNothingFields )
 
 -- async -------------------------------
 
@@ -28,19 +27,18 @@ import Control.Concurrent.Async  ( Async,
 
 -- base --------------------------------
 
-import Control.Concurrent.MVar  qualified as  MVar
-
 import Control.Concurrent       ( ThreadId, forkIO, myThreadId, newEmptyMVar,
                                   putMVar,takeMVar, threadDelay)
 import Control.Concurrent.MVar  ( MVar, readMVar, modifyMVar_, newMVar,
-                                  tryPutMVar, tryReadMVar, tryTakeMVar, withMVar )
+                                  tryPutMVar, tryReadMVar, tryTakeMVar )
 import Control.Exception        ( SomeException, catch, displayException )
 import Control.Monad            ( forever )
-import Data.List                ( isPrefixOf )
-import Data.Maybe               ( isJust )
+import Data.Char                ( isUpper, toLower )
+import Data.List                ( dropWhile, isPrefixOf )
 import Data.Semigroup           ( sconcat )
 import Data.String              ( fromString )
 import Data.Tuple               ( uncurry )
+import GHC.Generics             ( Generic )
 import System.IO                ( BufferMode( NoBuffering ), Handle,
                                   IOMode( ReadMode, ReadWriteMode ),
                                   hClose, hGetLine, hSetBuffering, openFile
@@ -100,7 +98,7 @@ import MonadIO.Base  ( getArgs )
 
 -- mtl ---------------------------------
 
-import Control.Monad.Reader  ( MonadReader, ReaderT, runReaderT, ask, asks )
+import Control.Monad.Reader  ( MonadReader, ReaderT, runReaderT, ask )
 
 -- natural -----------------------------
 
@@ -260,10 +258,6 @@ data LanCheck = LanCheck (Async ())
 
 ----------
 
-instance Show LanCheck where show _ = "LanCheck"
-
-----------
-
 instance Pollable LanCheck () where poll (LanCheck a) = Async.poll a
 
 ----------
@@ -289,19 +283,18 @@ data TimeStamped α = TimeStamped { _lastChecked ∷ 𝕄 UTCTime
                                  , _lastChanged ∷ 𝕄 UTCTime
                                  , _value       ∷ α
                                  }
-  deriving Show
+  deriving (Generic, Show)
 
 ----------
 
 instance (ToJSON α, Show α) ⇒ ToJSON (TimeStamped α) where
-  toJSON t = let rs = [ "value" .= _value t ]
-             in  case _lastChecked t of
-                   𝓝 → object rs
-                   𝓙 ts → let ṙṡ = ("last-checked" .= ts) : rs
-                          in  case _lastChanged t of
-                                𝓝    → object ṙṡ
-                                𝓙 ṫṡ → let ṛṣ = ("last-changed" .= ṫṡ) : ṙṡ
-                                       in  object ṛṣ
+  toJSON =
+    let hyphenate (c:cs) | isUpper c = '-' : toLower c : hyphenate cs
+                         | otherwise = c : hyphenate cs
+        hyphenate []                 = []
+        fieldLabelModifier = hyphenate ∘ dropWhile (≡'_')
+    in  genericToJSON (defaultOptions { omitNothingFields = 𝓣
+                                      , fieldLabelModifier = fieldLabelModifier })
 
 --------------------
 
@@ -314,23 +307,10 @@ tsValue (TimeStamped _ _ a) = a
 tsUpdate ∷ (MonadIO μ, Eq α, Show α) ⇒ TimeStamped α → α → μ (TimeStamped α)
 tsUpdate (TimeStamped _ c a) a' = liftIO $ do
   now ← getCurrentTime
-  debug $ [fmt|tsUpdate> current time %z|] now
--- XXX this causes lockup!
-
   let c' = case c of
              𝓝 → now
              𝓙 ĉ → if a ≡ a' then ĉ else now
-
-  debug $ [fmt|tsUpdate! current time %z|] now
-  y ← return $ TimeStamped (𝓙 now) (𝓙 c') a'
-
-  debug $ [fmt|tsUpdate< current time %z|] now
-  x ← return $ TimeStamped 𝓝 𝓝 a'
-  debug $ [fmt|tsUpdate¡ current time %z|] now
-  -- returning y here rather than x causes a lockup.  New connections
-  -- are handled, but no connection actually receives a response
-  debug $ [fmt|tsUpdate» y: %w|] y -- LOCKS UP
-  return y
+  return $ TimeStamped (𝓙 now) (𝓙 c') a'
 
 ------------------------------------------------------------
 --                          Cache                         --
@@ -464,6 +444,7 @@ newContext = liftIO $ do
 
 cacheResponse ∷ MonadIO μ ⇒ Context → LBS.ByteString → μ LBS.ByteString
 cacheResponse ctxt "updateLanIPs" = liftIO $ updateLanIPs ctxt ⪼ return "OK"
+-- XXX factor out the encoding to a common core
 cacheResponse ctxt "lanIPs" = encode ∘ _lanIPs ⊳ liftIO (readMVar (_cache ctxt))
 cacheResponse ctxt "wanIP"  = encode ∘ _wanIP ⊳ liftIO (readMVar (_cache ctxt))
 cacheResponse _ _        = return "Unknown request"
@@ -512,21 +493,20 @@ withStdoutProc create_proc action = do
     the WanIP (unless there's no LanIPs: in which case, set the WanIP to 𝓝 -}
 updateLanIPs ∷ Context → IO ()
 updateLanIPs ctxt = readerRunT ctxt $ do
-  debug "updateLanIPs"
   lan_ips ← lanIPs
   liftIO $ modifyMVar_ (_cache ctxt)
            (\ c → do
               let prev_ips = cacheLanIPs c
-              debug $ [fmt|updateLanIPs: %w|] (lan_ips ≠ prev_ips)
               when (lan_ips ≠ prev_ips) -- lan_ips changed
-                   (case lan_ips of
-                     []  → ø $ setNoWanIP ctxt c           -- no lan, no wan
-                     _xs → updateWanIPTimer (SECS 5) ctxt) -- new lan, check wan
+                   (do debug $ [fmt|updateLanIPs: %w|] lan_ips
+                       case lan_ips of
+                         []  → ø $ setNoWanIP ctxt c          -- no lan: no wan
+                         _xs → updateWanIPTimer (SECS 5) ctxt)-- new lan: upd wan
               updateCacheLanIPs c lan_ips
            )
   liftIO $ modifyMVar_ (_lanCheckQueue ctxt) $ \ case
-    𝓕 → debug "updateLanIPs: nothing doing" ⪼ return 𝓕
-    𝓣 → debug "updateLanIPs: new timer" ⪼  readerRunT ctxt ensureLanIPsTimer ⪼ return 𝓕
+    𝓕 → return 𝓕
+    𝓣 → readerRunT ctxt ensureLanIPsTimer ⪼ return 𝓕
 
 
 
@@ -559,11 +539,9 @@ lanWatcher = do
   debug "lanwatcher: starting"
   let process_ip_monitor_lines ∷ Handle → IO ()
       process_ip_monitor_lines ipm_out = forever $ ø (ⵎ ctxt $ do
-         debug "lanWatcher: wait for a line"
          l ← liftIO $ hGetLine ipm_out
-         debug "lanWatcher: got a line"
-         ensureLanIPsTimer
-         debug $ [fmt|ip monitor: %s|] l)
+         debug $ [fmt|ip monitor: %s|] l
+         ensureLanIPsTimer)
 
   let ipArgs    = [ "-tshort", "monitor", "address" ]
       ipMonitor = proc (toString ipPath) ipArgs
@@ -657,19 +635,12 @@ handleClient sock = do
   handle ← liftIO $ socketToHandle sock ReadWriteMode
   liftIO $ hSetBuffering handle NoBuffering
   command ← liftIO $ fromString ⊳ hGetLine handle
-  debug $ [fmt|requesting cache for: %w|] peer_name
   ctxt ← ask
-  cache ← asks _cache
-  debug $ [fmt|formatting response for: %w|] peer_name
-  response ← liftIO $ do
-    cacheResponse ctxt command
-  debug $ [fmt|responding to: %w|] peer_name
+  response ← liftIO $ cacheResponse ctxt command
   liftIO $ LBS.hPutStr handle (response ◇ "\n")
-  debug $ [fmt|done with connection: %w|] peer_name
   liftIO $ hClose handle
 
 --------------------- Options Handling ---------------------
-
 
 data Options = Options { _port ∷ PortNumber }
 
