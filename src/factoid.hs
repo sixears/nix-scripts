@@ -442,6 +442,7 @@ newContext = liftIO $ do
 
 cacheResponse ∷ MonadIO μ ⇒ Context → LBS.ByteString → μ LBS.ByteString
 cacheResponse ctxt "updateLanIPs" = liftIO $ updateLanIPs ctxt ⪼ return "OK"
+cacheResponse ctxt "updateWanIP"  = liftIO $ updateWanIP  ctxt ⪼ return "OK"
 -- XXX factor out the encoding to a common core
 cacheResponse ctxt "lanIPs" = encode ∘ _lanIPs ⊳ liftIO (readMVar (_cache ctxt))
 cacheResponse ctxt "wanIP"  = encode ∘ _wanIP ⊳ liftIO (readMVar (_cache ctxt))
@@ -560,14 +561,13 @@ lanWatcher = do
 -- XXX update wanIP every minute after a lanIP change, until you get a real
 -- result; every 10m thereafter
 -- XXX single place to update _wanIP; to update _wanIPTimer
-updateWanIP ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
-updateWanIP =
-  fireAndForget updateWanIP_
+updateWanIP ∷ MonadIO μ ⇒ Context → μ ()
+updateWanIP ctxt =
+  fireAndForget' ctxt updateWanIP_
   where
     updateWanIP_ ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
     updateWanIP_ = do
       wan_ip ← ѥ $ wanIP
-      ctxt ← ask
       liftIO $ modifyMVar_ (_cache ctxt) $ \ c →
         case wan_ip of
           𝓛 (e ∷ IOParseError) → do
@@ -585,7 +585,7 @@ updateWanIP =
 wanIPTimer ∷ Duration → Context → IO WanCheck
 wanIPTimer dur ctxt = do
   debug $ [fmt|wanIPTimer %T|] dur
-  WanCheck ⊳ mkTimer dur (flip runReaderT ctxt $ updateWanIP)
+  WanCheck ⊳ mkTimer dur (updateWanIP ctxt)
 
 ----------------------------------------
 
