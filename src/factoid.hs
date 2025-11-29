@@ -5,7 +5,6 @@
 {-# LANGUAGE QuasiQuotes            #-}
 {-# LANGUAGE UnicodeSyntax          #-}
 
--- XXX eliminate `-- β is typically Context` from setCancelMVar
 -- XXX add updateWanIP call
 -- XXX add timestamp to WanIP
 
@@ -224,9 +223,8 @@ mkTimer duration action = async $ sleep duration ⪼ action
 {-| Set an MVar, nixing any existing Cancellable in place before replacing it
     with a new one.  Note that this will block if the MVar is empty.
 -}
--- β is typically Context
-setCancelMVar ∷ (MonadIO μ, Cancellable α)⇒ MVar α → (β → IO α) → β → μ ()
-setCancelMVar mv mk x = liftIO $ modifyMVar_ mv $ \ c → cancel c ⪼ mk x
+setCancelMVar ∷ (MonadIO μ, Cancellable α)⇒ MVar α → IO α → μ ()
+setCancelMVar mv mk = liftIO $ modifyMVar_ mv $ \ c → cancel c ⪼ mk
 
 ----------------------------------------
 
@@ -594,7 +592,7 @@ wanIPTimer dur ctxt = do
 updateWanIPTimer ∷ MonadIO μ ⇒ Duration → Context → μ ()
 updateWanIPTimer dur ctxt = liftIO $ do
   debug "updateWanIPTimer"
-  setCancelMVar (_wanIPTimer ctxt) (wanIPTimer dur) ctxt
+  setCancelMVar (_wanIPTimer ctxt) (wanIPTimer dur ctxt)
 
 ----------------------------------------
 
