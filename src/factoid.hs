@@ -5,9 +5,6 @@
 {-# LANGUAGE QuasiQuotes            #-}
 {-# LANGUAGE UnicodeSyntax          #-}
 
--- XXX add updateWanIP call
--- XXX add timestamp to WanIP
-
 import Base1
 import Prelude  ( round )
 
@@ -179,8 +176,6 @@ forks ctxt =
 
 ----------------------------------------
 
---------------------
-
 {-| run some IO (that is a ReaderT) in a thread, without ever
     collecting -}
 fireAndForget' ∷ (MonadIO μ) ⇒ α → ReaderT α IO () → μ ()
@@ -315,31 +310,38 @@ tsUpdate (TimeStamped _ c a) a' = liftIO $ do
 ------------------------------------------------------------
 
 data Cache = Cache { _lanIPs ∷ TimeStamped [IP4]
-                   , _wanIP  ∷ 𝕄 IP4
+                   , _wanIP  ∷ TimeStamped (𝕄 IP4)
                    }
---  deriving Show
--- XXX
-
-instance Show Cache where show _ = "CACHE"
+  deriving Show
 
 ----------
 
 newCache ∷ MonadIO μ ⇒ μ (MVar Cache)
-newCache = liftIO $ newMVar (Cache { _lanIPs = newTS [], _wanIP = 𝓝 })
+newCache = liftIO $ newMVar (Cache { _lanIPs = newTS [], _wanIP = newTS 𝓝 })
 
 ----------------------------------------
 
-cacheLanIPs ∷ Cache → [IP4]
-cacheLanIPs = tsValue ∘ _lanIPs
+cacheLanIPs ∷ Lens' Cache (TimeStamped [IP4])
+cacheLanIPs = lens _lanIPs (\ c ip4s → c { _lanIPs = ip4s })
 
 ----------------------------------------
 
 updateCacheLanIPs ∷ MonadIO μ ⇒ Cache → [IP4] → μ Cache
-updateCacheLanIPs c ip4s' = do
-  debug $ [fmt|updateCacheLanIPs: %w|] ip4s'
-  let ip4s = _lanIPs c
-  ip4sUp ← tsUpdate ip4s ip4s'
-  return c { _lanIPs = ip4sUp }
+updateCacheLanIPs c ip4s = do
+  ip4sUp ← tsUpdate (c ⊣ cacheLanIPs) ip4s
+  return $ c & cacheLanIPs ⊢ ip4sUp
+
+----------------------------------------
+
+cacheWanIP ∷ Lens' Cache (TimeStamped (𝕄 IP4))
+cacheWanIP = lens _wanIP (\ c ip4 → c { _wanIP = ip4 })
+
+----------------------------------------
+
+updateCacheWanIP ∷ MonadIO μ ⇒ Cache → (𝕄 IP4) → μ Cache
+updateCacheWanIP c ip4 = do
+  ip4Up ← tsUpdate (c ⊣ cacheWanIP) ip4
+  return $ c & cacheWanIP ⊢ ip4Up
 
 ------------------------------------------------------------
 --                     OutputChannel                      --
@@ -495,7 +497,7 @@ updateLanIPs ctxt = readerRunT ctxt $ do
   lan_ips ← lanIPs
   liftIO $ modifyMVar_ (_cache ctxt)
            (\ c → do
-              let prev_ips = cacheLanIPs c
+              let prev_ips = tsValue $ c ⊣ cacheLanIPs
               when (lan_ips ≠ prev_ips) -- lan_ips changed
                    (do debug $ [fmt|updateLanIPs: %w|] lan_ips
                        case lan_ips of
@@ -578,7 +580,7 @@ updateWanIP ctxt =
             debug "updateWanIP: got IP, sleeping 10mins"
             updateWanIPTimer (MINS 10) ctxt
             debug $ [fmt|updateWanIP: returning %w|] ip
-            return (c { _wanIP = ip })
+            updateCacheWanIP c ip
 
 ----------------------------------------
 
@@ -609,7 +611,7 @@ cancelWanIPTimer ctxt = do
 setNoWanIP ∷ Context → Cache → IO Cache
 setNoWanIP ctxt cache = do
   cancelWanIPTimer ctxt
-  return $ cache { _wanIP = 𝓝 }
+  updateCacheWanIP cache 𝓝
 
 ----------------------------------------
 
