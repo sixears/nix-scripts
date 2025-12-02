@@ -6,12 +6,14 @@
 {-# LANGUAGE UnicodeSyntax          #-}
 
 import Base1
-import Prelude  ( round )
+import Prelude  ( Float, properFraction, round )
 
 -- aeson -------------------------------
 
-import Data.Aeson  ( ToJSON( toJSON ), defaultOptions, encode
-                   , fieldLabelModifier, genericToJSON, omitNothingFields )
+import Data.Aeson  ( ToJSON( toJSON ), (.=), defaultOptions, encode,
+                     fieldLabelModifier, genericToJSON, object,
+                     omitNothingFields
+                   )
 
 -- async -------------------------------
 
@@ -35,6 +37,7 @@ import Data.Semigroup           ( sconcat )
 import Data.String              ( fromString )
 import Data.Tuple               ( uncurry )
 import GHC.Generics             ( Generic )
+import GHC.Real                 ( floor, realToFrac )
 import System.IO                ( BufferMode( NoBuffering ), Handle,
                                   IOMode( ReadMode, ReadWriteMode ),
                                   hClose, hGetLine, hSetBuffering, openFile
@@ -49,7 +52,7 @@ import System.Process           ( CreateProcess( std_in, std_out, std_err ),
 
 -- base-unicode-symbols ----------------
 
-import Prelude.Unicode  ( (≠) )
+import Prelude.Unicode  ( (≠), (×) )
 
 -- bytestring --------------------------
 
@@ -132,8 +135,8 @@ import Data.Text  qualified as  T
 
 -- time --------------------------------
 
--- XXX add time to all cached values / check time & changed time? access time?
-import Data.Time ( UTCTime, getCurrentTime )
+import Data.Time              ( UTCTime, getCurrentTime )
+import Data.Time.Clock.POSIX  ( utcTimeToPOSIXSeconds )
 
 -- unix --------------------------------
 
@@ -267,11 +270,25 @@ instance Cancellable WanCheck where
   cancel (WanCheck w) = Async.cancel w
 
 ------------------------------------------------------------
+--                         GMTime                         --
+------------------------------------------------------------
+
+newtype GMTime = GMTime UTCTime
+  deriving (Eq,Show)
+
+instance ToJSON GMTime where
+  toJSON (GMTime u) =
+    let s = utcTimeToPOSIXSeconds u
+        sub_seconds ∷ Word16 = floor $ 1_000 × snd (properFraction @Float @ℤ $ realToFrac s)
+    in  object [ "epoch-seconds"  .= s
+               , "human-readable" .= [fmtT|%z.%03d|] u sub_seconds]
+
+------------------------------------------------------------
 --                       TimeStamped                      --
 ------------------------------------------------------------
 
-data TimeStamped α = TimeStamped { _lastChecked ∷ 𝕄 UTCTime
-                                 , _lastChanged ∷ 𝕄 UTCTime
+data TimeStamped α = TimeStamped { _lastChecked ∷ 𝕄 GMTime
+                                 , _lastChanged ∷ 𝕄 GMTime
                                  , _value       ∷ α
                                  }
   deriving (Generic, Show)
@@ -299,7 +316,7 @@ tsValue (TimeStamped _ _ a) = a
 
 tsUpdate ∷ (MonadIO μ, Eq α, Show α) ⇒ TimeStamped α → α → μ (TimeStamped α)
 tsUpdate (TimeStamped _ c a) a' = liftIO $ do
-  now ← getCurrentTime
+  now ← GMTime ⊳ getCurrentTime
   let c' = case c of
              𝓝 → now
              𝓙 ĉ → if a ≡ a' then ĉ else now
