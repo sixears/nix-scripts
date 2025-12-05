@@ -294,8 +294,6 @@ data TimeStamped α = TimeStamped { _lastChecked ∷ 𝕄 GMTime
 ----------
 
 instance (ToJSON α, Show α) ⇒ ToJSON (TimeStamped α) where
-  -- XXX add a newtype UTC with toJSON to write as seconds (incl. precision)
-  --     in addition to human-readable?
   toJSON =
     let hyphenate (c:cs) | isUpper c = '-' : toLower c : hyphenate cs
                          | otherwise = c : hyphenate cs
@@ -458,12 +456,15 @@ newContext = liftIO $ do
 ----------------------------------------
 
 cacheResponse ∷ MonadIO μ ⇒ Context → LBS.ByteString → μ LBS.ByteString
-cacheResponse ctxt "updateLanIPs" = liftIO $ updateLanIPs ctxt ⪼ return "OK"
-cacheResponse ctxt "updateWanIP"  = liftIO $ updateWanIP  ctxt ⪼ return "OK"
--- XXX factor out the encoding to a common core
-cacheResponse ctxt "lanIPs" = encode ∘ _lanIPs ⊳ liftIO (readMVar (_cache ctxt))
-cacheResponse ctxt "wanIP"  = encode ∘ _wanIP ⊳ liftIO (readMVar (_cache ctxt))
-cacheResponse _ _        = return "Unknown request"
+cacheResponse ctxt msg =
+  let update f = liftIO $ f ctxt ⪼ return "OK"
+      fromCache f = encode ∘ f ⊳ liftIO (readMVar (_cache ctxt))
+  in  case msg of
+        "updateLanIPs" → update updateLanIPs
+        "updateWanIP"  → update updateWanIP
+        "lanIPs"       → fromCache _lanIPs
+        "wanIP"        → fromCache _wanIP
+        _              → return "Unknown request"
 
 ----------------------------------------
 
