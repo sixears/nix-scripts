@@ -6,7 +6,7 @@
 {-# LANGUAGE UnicodeSyntax          #-}
 
 import Base1
-import Prelude  ( Float, properFraction, round )
+import Prelude  ( round )
 
 -- aeson -------------------------------
 
@@ -37,7 +37,6 @@ import Data.Semigroup           ( sconcat )
 import Data.String              ( fromString )
 import Data.Tuple               ( uncurry )
 import GHC.Generics             ( Generic )
-import GHC.Real                 ( floor, realToFrac )
 import System.IO                ( BufferMode( NoBuffering ), Handle,
                                   IOMode( ReadMode, ReadWriteMode ),
                                   hClose, hGetLine, hSetBuffering, openFile
@@ -52,7 +51,7 @@ import System.Process           ( CreateProcess( std_in, std_out, std_err ),
 
 -- base-unicode-symbols ----------------
 
-import Prelude.Unicode  ( (≠), (×) )
+import Prelude.Unicode  ( (≠) )
 
 -- bytestring --------------------------
 
@@ -279,9 +278,8 @@ newtype GMTime = GMTime UTCTime
 instance ToJSON GMTime where
   toJSON (GMTime u) =
     let s = utcTimeToPOSIXSeconds u
-        sub_seconds ∷ Word16 = floor $ 1_000 × snd (properFraction @Float @ℤ $ realToFrac s)
     in  object [ "epoch-seconds"  .= s
-               , "human-readable" .= [fmtT|%z.%03d|] u sub_seconds]
+               , "human-readable" .= [fmtT|%.3z|] u]
 
 ------------------------------------------------------------
 --                       TimeStamped                      --
