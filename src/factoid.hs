@@ -20,13 +20,17 @@ import Data.Aeson  ( ToJSON( toJSON ), (.=), defaultOptions, encode,
 import Control.Concurrent.Async  qualified as  Async
 import Control.Concurrent.Async  ( Async,
                                    Concurrently( Concurrently, runConcurrently ),
-                                   async
+                                   async, asyncThreadId
                                  )
 
 -- base --------------------------------
 
+import qualified System.Timeout
+
 import Control.Concurrent       ( ThreadId, forkIO, myThreadId, newEmptyMVar,
                                   putMVar,takeMVar, threadDelay)
+import Control.Concurrent.Chan  ( Chan
+                                , getChanContents, newChan, readChan, writeChan )
 import Control.Concurrent.MVar  ( MVar, readMVar, modifyMVar_, newMVar,
                                   tryPutMVar, tryReadMVar, tryTakeMVar )
 import Control.Exception        ( SomeException, catch, displayException )
@@ -39,13 +43,14 @@ import Data.Tuple               ( uncurry )
 import GHC.Generics             ( Generic )
 import System.IO                ( BufferMode( NoBuffering ), Handle,
                                   IOMode( ReadMode, ReadWriteMode ),
-                                  hClose, hGetLine, hSetBuffering, openFile
+                                  hClose, hGetLine, hPutStrLn, hSetBuffering
+                                , openFile, stderr
                                 )
 import System.IO.Unsafe         ( unsafePerformIO )
 import System.Process           ( CreateProcess( std_in, std_out, std_err ),
                                   ProcessHandle,
                                   StdStream( CreatePipe, Inherit, UseHandle ),
-                                  getPid, proc, terminateProcess,
+                                  getPid, proc, terminateProcess, waitForProcess,
                                   withCreateProcess
                                 )
 
@@ -160,6 +165,11 @@ sleep dur = liftIO $ threadDelay (round $ dur ⊣ asMicroseconds)
 
 ----------------------------------------
 
+timeout ∷ Duration → IO α → IO (𝕄 α)
+timeout dur = System.Timeout.timeout (round $ dur ⊣ asMicroseconds)
+
+----------------------------------------
+
 readerRunT ∷ ∀ α β η . β → ReaderT β η α → η α
 readerRunT = flip runReaderT
 
@@ -172,9 +182,18 @@ readerRunT = flip runReaderT
 ----------------------------------------
 
 {-| fire off a number concurrent threads (each a MonadReader) -}
-forks ∷ MonadIO μ ⇒ β → NonEmpty (ReaderT β IO ()) → μ ()
+-- forks ∷ MonadIO μ ⇒ β → NonEmpty (ReaderT β IO ()) → μ ()
+forks ∷ MonadIO μ ⇒ Context → NonEmpty (ReaderT Context IO ()) → μ ()
 forks ctxt =
-  ø ∘ async ∘ runConcurrently ∘ sconcat ∘ fmap (Concurrently ∘ readerRunT ctxt)
+  let async' ∷ IO α → IO (Async α)
+      async' io = do
+        debug $ [fmt|async'|]
+        a ← async io
+        let ast = mkAsyncTool "foo" a
+        debug $ [fmt|made async|]
+        modifyMVar_ (_childThreads ctxt) (\ asts → return $ ast : asts)
+        return a
+  in  ø ∘ async' ∘ runConcurrently ∘ sconcat ∘ fmap (Concurrently ∘ readerRunT ctxt)
 
 ----------------------------------------
 
@@ -192,6 +211,18 @@ fireAndForget' oc io =
     collecting (suitable for an OutputChannel Reader context) -}
 fireAndForget ∷ (MonadIO μ, MonadReader α μ) ⇒ ReaderT α IO () → μ ()
 fireAndForget io = ask ≫ \ oc → fireAndForget' oc io
+
+data Complete = Complete | Incomplete
+data AsyncTool = AsyncTool { _name ∷ 𝕋, _threadID ∷ ThreadId
+                           , _cancel ∷ () → IO (), _poll ∷ () → IO Complete }
+
+mkAsyncTool ∷ 𝕋 → Async α → AsyncTool
+mkAsyncTool nm a =
+  AsyncTool { _name     = nm
+            , _threadID = asyncThreadId a
+            , _cancel   = const$ Async.cancel a
+            , _poll     = const$ maybe Incomplete (const Complete)⊳(Async.poll a)
+            }
 
 ------------------------------------------------------------
 --                        Pollable                        --
@@ -379,8 +410,8 @@ writeOutput (OutputChannel mv) = liftIO (takeMVar mv) ≫ uncurry logIOT
 
 ----------------------------------------
 
-globalOutput ∷ OutputChannel
-globalOutput = unsafePerformIO $ newOutputChannel
+globalOutput ∷ Chan (Severity,𝕋,𝕄 ExitCode)
+globalOutput = unsafePerformIO $ newChan
 
 ----------------------------------------
 
@@ -391,7 +422,7 @@ log sev t = liftIO $ do
         | prefix `isPrefixOf` str = drop_ (len_ prefix) str
         | otherwise = str
   tid ← (removePrefix "ThreadId " ∘ show) ⊳ myThreadId
-  output globalOutput sev $ [fmt|«%05s» |] tid ◇ t
+  writeChan globalOutput (sev, [fmt|«%05s» |] tid ◇ t, 𝓝)
 
 --------------------
 
@@ -425,7 +456,7 @@ data Context = Context { _cache         ∷ MVar Cache
                        , _wanIPTimer    ∷ MVar WanCheck
                          -- ^ the timer for a wanIP update
                        , _childProcs    ∷ MVar (Map.Map 𝕋 ProcessHandle)
-                       , _childThreads  ∷ MVar (Map.Map 𝕋 ThreadId)
+                       , _childThreads  ∷ MVar [AsyncTool]
                        , _outputChannel ∷ OutputChannel
                        , _exit          ∷ MVar Word8
                        }
@@ -439,7 +470,7 @@ newContext = liftIO $ do
   lan_check       ← newEmptyMVar
   wan_check       ← WanCheck ⊳ async (return ()) ≫ newMVar
   child_procs     ← newMVar Map.empty
-  child_threads   ← newMVar Map.empty
+  child_threads   ← newMVar [] -- Map.empty
   lan_check_queue ← newMVar 𝓕
 --  output_channel ← newOutputChannel
   let ctxt = Context { _cache         = cache
@@ -449,7 +480,7 @@ newContext = liftIO $ do
                      , _childProcs    = child_procs
                      , _childThreads  = child_threads
                      , _exit          = exit
-                     , _outputChannel = globalOutput -- output_channel
+--                     , _outputChannel = globalOutput -- output_channel
                      }
   lanIPsTimer ctxt ⪼ return ctxt
 
@@ -470,20 +501,43 @@ cacheResponse ctxt msg =
 
 cleanup ∷ Context → IO ()
 cleanup ctxt = do
--- XXX use async for ip monitor thread?
 -- XXX terminate threads first?
 
   debug "Cleanup: terminating child processes..."
   -- XXX delete procs as we terminate them, and thus update the MVar
+  tryReadMVar (_childProcs ctxt) ≫ \ case
+    𝓝   → debug "no child proc read"
+    𝓙 sp → debug $ [fmt|cps: %d|] (len_ sp)
   ps ← readMVar (_childProcs ctxt)
-  mapM_ (\ (nm,p) → do
+  debug $ [fmt|child procs: %d|] (len_ ps)
+  forM_  (Map.toList ps) (\ (nm,p) → do
       pid ← getPid p
       warn $ [fmt|terminating %t (%d)|] nm (pid ⧏ 0)
       terminateProcess p
+      warn "terminated!"
       -- I don't think there's any value in waiting for the process to finish
-      -- _ <- waitForProcess ph
-      ) (Map.toList ps)
-  putMVar (_exit ctxt) 0
+      let dur = SECS 1
+      timeout dur (waitForProcess p) ≫ \ case
+        𝓝   → warn $ [fmt|process %t (%d) did not terminate within %T|]
+                      nm (pid ⧏ 0) dur
+        𝓙 x → warn $ [fmt|process %t (%d) exited %w|] nm (pid ⧏ 0) x
+    )
+  ts ← readMVar (_childThreads ctxt)
+  forM_  ({- Map.toList -} ts) (\ {- (nm,(tid,cncl)) -} ast → do
+                             debug $ [fmt|closing thread: %t|] (_name ast)
+                             return ()
+{-
+                             poll t ≫ \ case
+                               𝓝 → return () -- already completed
+                               𝓙 _ → do
+                                 -- let tid = asyncThreadId t
+                                 warn $ [fmt|cancelling thread %t (%d)|] nm t
+                                 cancel t
+-}
+                         )
+  debug "awooga"
+  putMVar (_exit ctxt) 77 -- XXX
+  writeChan globalOutput (Warning,"xxBYExx",𝓙 $ ExitFailure 77)
   debug "cleanup complete: exiting"
 
 ------------------------------------------------------------
@@ -714,11 +768,34 @@ main = let desc ∷ 𝕋 = "monitor & report some facts to interested callers"
                -- this has to run at the top level, to benefit from the StdMain
                -- log instance
                forever $ do
-                 writeOutput (_outputChannel ctxt)
+                 -- writeOutput (_outputChannel ctxt)
+                 -- read one thing, check if there's an exit, try again;
+                 -- thus, when exiting, call exit and then write a message
+                 -- there's thus a race condition that if somebody else writes
+                 -- a message between the exit call and the final message, that
+                 -- the final message will be lost
+--                 liftIO (readChan globalOutput) ≫ uncurry logIOT
                  -- liftIO (takeMVar (_outputChannel ctxt)) ≫ uncurry logIOT
+                 ø ∘ async $ do
+                   e ← takeMVar (_exit ctxt)
+                   hPutStrLn stderr "¡exiting!"
+                   exitWith e
+                   hPutStrLn stderr "‼bye‼"
+                   -- a ← async $ getChanContents c ≫ \ ts → forM_ ts say
+                 liftIO (getChanContents globalOutput) ≫ \ ts → forM_ ts (\ (sev,t,x) → case x of 𝓝 → logIOT sev t; 𝓙 x' → logIOT sev t ⪼ liftIO (hPutStrLn stderr "--bye--") ⪼ ø (exitWith x'))
+{-
+                 case ė of
+                   𝓝 → return ()
+                   𝓙 e →
+                     -- XXX need to cycle through all the remaining msgs here
+                     ø $ hPutStrLn stderr "exiting" ⪼ liftIO (exitWith e)
+-}
+{-
                  liftIO (tryTakeMVar (_exit ctxt)) ≫ \ case
                    𝓝 → return ()
-                   𝓙 e → ø $ exitWith e
-
+                   𝓙 e →
+                     -- XXX need to cycle through all the remaining msgs here
+                     ø $ hPutStrLn stderr "exiting" ⪼ liftIO (exitWith e)
+-}
 
 -- that's all, folks! ----------------------------------------------------------
