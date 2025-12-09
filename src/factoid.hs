@@ -180,7 +180,6 @@ readerRunT = flip runReaderT
 ----------------------------------------
 
 {-| fire off a number concurrent threads (each a MonadReader) -}
--- forks ∷ MonadIO μ ⇒ β → NonEmpty (ReaderT β IO ()) → μ ()
 forks ∷ MonadIO μ ⇒ Context → NonEmpty (ReaderT Context IO ()) → μ ()
 forks ctxt =
   let async' ∷ IO α → IO (Async α)
@@ -475,21 +474,16 @@ cacheResponse ctxt msg =
 
 cleanup ∷ Context → IO ()
 cleanup ctxt = do
--- XXX terminate threads first?
+-- XXX terminate threads
 
   debug "Cleanup: terminating child processes..."
   -- XXX delete procs as we terminate them, and thus update the MVar
-  tryReadMVar (_childProcs ctxt) ≫ \ case
-    𝓝   → debug "no child proc read"
-    𝓙 sp → debug $ [fmt|cps: %d|] (len_ sp)
   ps ← readMVar (_childProcs ctxt)
   debug $ [fmt|child procs: %d|] (len_ ps)
   forM_  (Map.toList ps) (\ (nm,p) → do
       pid ← getPid p
       warn $ [fmt|terminating %t (%d)|] nm (pid ⧏ 0)
       terminateProcess p
-      warn "terminated!"
-      -- I don't think there's any value in waiting for the process to finish
       let dur = SECS 1
       timeout dur (waitForProcess p) ≫ \ case
         𝓝   → warn $ [fmt|process %t (%d) did not terminate within %T|]
@@ -497,24 +491,11 @@ cleanup ctxt = do
         𝓙 x → warn $ [fmt|process %t (%d) exited %w|] nm (pid ⧏ 0) x
     )
   ts ← readMVar (_childThreads ctxt)
-  forM_  ({- Map.toList -} ts) (\ {- (nm,(tid,cncl)) -} ast → do
-                             debug $ [fmt|closing thread: %t|] (_name ast)
-                             return ()
-{-
-                             poll t ≫ \ case
-                               𝓝 → return () -- already completed
-                               𝓙 _ → do
-                                 -- let tid = asyncThreadId t
-                                 warn $ [fmt|cancelling thread %t (%d)|] nm t
-                                 cancel t
--}
-                         )
-  debug "awooga"
-  putMVar (_exit ctxt) 77 -- XXX
-  writeChan globalOutput (Warning,"xxBYExx",𝓙 $ ExitFailure 77)
-  debug "cleanup complete: exiting"
-
-------------------------------------------------------------
+  forM_  (ts) (\ ast → do debug $ [fmt|closing thread: %t|] (_name ast)
+                          return ())
+  -- XXX 0 if instructed with "quit" command
+  writeChan globalOutput (Warning, "cleanup complete: exiting",
+                          𝓙 $ ExitFailure 255)
 
 -------------------- Process Utilities ---------------------
 
