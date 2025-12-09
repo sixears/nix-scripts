@@ -72,7 +72,7 @@ import Duration  ( Duration( SECS, MINS ), asMicroseconds )
 
 -- exited ------------------------------
 
-import Exited  ( exitWith )
+import Exited  ( ToExitCode, exitWith )
 
 -- fpath -------------------------------
 
@@ -753,6 +753,13 @@ installCtrlCHandler ∷ MonadIO μ ⇒ Context → μ Handler
 installCtrlCHandler ctxt =
   liftIO $ installHandler keyboardSignal (Catch (cleanup ctxt)) 𝓝
 
+logAndMaybeQuit ∷ (MonadIO μ, Default ω, MonadLog (Log ω) μ, ToExitCode ξ) ⇒
+                  (Severity, 𝕋, 𝕄 ξ) → μ ()
+logAndMaybeQuit (sev,msg,ext) =
+  case ext of
+    𝓝    → logIOT sev msg
+    𝓙 xt → logIOT sev msg ⪼ ø (exitWith xt)
+
 -- XXX use logging warn/info/debug
 main ∷ IO ()
 main = let desc ∷ 𝕋 = "monitor & report some facts to interested callers"
@@ -767,35 +774,6 @@ main = let desc ∷ 𝕋 = "monitor & report some facts to interested callers"
                forks ctxt $ lanWatcher :| [ ø ∘ ⵎ ctxt $ acceptor sock ]
                -- this has to run at the top level, to benefit from the StdMain
                -- log instance
-               forever $ do
-                 -- writeOutput (_outputChannel ctxt)
-                 -- read one thing, check if there's an exit, try again;
-                 -- thus, when exiting, call exit and then write a message
-                 -- there's thus a race condition that if somebody else writes
-                 -- a message between the exit call and the final message, that
-                 -- the final message will be lost
---                 liftIO (readChan globalOutput) ≫ uncurry logIOT
-                 -- liftIO (takeMVar (_outputChannel ctxt)) ≫ uncurry logIOT
-                 ø ∘ async $ do
-                   e ← takeMVar (_exit ctxt)
-                   hPutStrLn stderr "¡exiting!"
-                   exitWith e
-                   hPutStrLn stderr "‼bye‼"
-                   -- a ← async $ getChanContents c ≫ \ ts → forM_ ts say
-                 liftIO (getChanContents globalOutput) ≫ \ ts → forM_ ts (\ (sev,t,x) → case x of 𝓝 → logIOT sev t; 𝓙 x' → logIOT sev t ⪼ liftIO (hPutStrLn stderr "--bye--") ⪼ ø (exitWith x'))
-{-
-                 case ė of
-                   𝓝 → return ()
-                   𝓙 e →
-                     -- XXX need to cycle through all the remaining msgs here
-                     ø $ hPutStrLn stderr "exiting" ⪼ liftIO (exitWith e)
--}
-{-
-                 liftIO (tryTakeMVar (_exit ctxt)) ≫ \ case
-                   𝓝 → return ()
-                   𝓙 e →
-                     -- XXX need to cycle through all the remaining msgs here
-                     ø $ hPutStrLn stderr "exiting" ⪼ liftIO (exitWith e)
--}
+               liftIO (getChanContents globalOutput) ≫ mapM_ logAndMaybeQuit
 
 -- that's all, folks! ----------------------------------------------------------
