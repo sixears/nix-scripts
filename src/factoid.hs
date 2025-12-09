@@ -28,23 +28,21 @@ import Control.Concurrent.Async  ( Async,
 import qualified System.Timeout
 
 import Control.Concurrent       ( ThreadId, forkIO, myThreadId, newEmptyMVar,
-                                  putMVar,takeMVar, threadDelay)
+                                  putMVar, threadDelay)
 import Control.Concurrent.Chan  ( Chan
-                                , getChanContents, newChan, readChan, writeChan )
+                                , getChanContents, newChan, writeChan )
 import Control.Concurrent.MVar  ( MVar, readMVar, modifyMVar_, newMVar,
-                                  tryPutMVar, tryReadMVar, tryTakeMVar )
+                                  tryPutMVar, tryReadMVar )
 import Control.Exception        ( SomeException, catch, displayException )
 import Control.Monad            ( forever )
 import Data.Char                ( isUpper, toLower )
 import Data.List                ( dropWhile, isPrefixOf )
 import Data.Semigroup           ( sconcat )
 import Data.String              ( fromString )
-import Data.Tuple               ( uncurry )
 import GHC.Generics             ( Generic )
 import System.IO                ( BufferMode( NoBuffering ), Handle,
                                   IOMode( ReadMode, ReadWriteMode ),
-                                  hClose, hGetLine, hPutStrLn, hSetBuffering
-                                , openFile, stderr
+                                  hClose, hGetLine, hSetBuffering, openFile
                                 )
 import System.IO.Unsafe         ( unsafePerformIO )
 import System.Process           ( CreateProcess( std_in, std_out, std_err ),
@@ -387,27 +385,6 @@ updateCacheWanIP c ip4 = do
   ip4Up ← tsUpdate (c ⊣ cacheWanIP) ip4
   return $ c & cacheWanIP ⊢ ip4Up
 
-------------------------------------------------------------
---                     OutputChannel                      --
-------------------------------------------------------------
-
-newtype OutputChannel = OutputChannel (MVar (Severity,𝕋))
-
-----------------------------------------
-
-newOutputChannel ∷ MonadIO μ ⇒ μ OutputChannel
-newOutputChannel = liftIO $ OutputChannel ⊳ newEmptyMVar
-
-----------------------------------------
-
-output ∷ MonadIO μ ⇒ OutputChannel → Severity → 𝕋 → μ ()
-output (OutputChannel mv) sv t = liftIO $ putMVar mv (sv,t)
-
-----------------------------------------
-
-writeOutput ∷ (MonadIO μ, MonadLog (Log ω) μ, Default ω) ⇒ OutputChannel → μ ()
-writeOutput (OutputChannel mv) = liftIO (takeMVar mv) ≫ uncurry logIOT
-
 ----------------------------------------
 
 globalOutput ∷ Chan (Severity,𝕋,𝕄 ExitCode)
@@ -457,7 +434,6 @@ data Context = Context { _cache         ∷ MVar Cache
                          -- ^ the timer for a wanIP update
                        , _childProcs    ∷ MVar (Map.Map 𝕋 ProcessHandle)
                        , _childThreads  ∷ MVar [AsyncTool]
-                       , _outputChannel ∷ OutputChannel
                        , _exit          ∷ MVar Word8
                        }
 
@@ -472,7 +448,6 @@ newContext = liftIO $ do
   child_procs     ← newMVar Map.empty
   child_threads   ← newMVar [] -- Map.empty
   lan_check_queue ← newMVar 𝓕
---  output_channel ← newOutputChannel
   let ctxt = Context { _cache         = cache
                      , _lanIPsTimer   = lan_check
                      , _lanCheckQueue = lan_check_queue
@@ -480,7 +455,6 @@ newContext = liftIO $ do
                      , _childProcs    = child_procs
                      , _childThreads  = child_threads
                      , _exit          = exit
---                     , _outputChannel = globalOutput -- output_channel
                      }
   lanIPsTimer ctxt ⪼ return ctxt
 
@@ -764,7 +738,7 @@ logAndMaybeQuit (sev,msg,ext) =
 main ∷ IO ()
 main = let desc ∷ 𝕋 = "monitor & report some facts to interested callers"
        in  getArgs ≫ stdMainNoDR @ScriptError desc parseOptions go
-       where go ∷ Options → LoggingT (Log MockIOClass) (ExceptT ScriptError IO) ()
+       where go ∷ Options → LoggingT (Log MockIOClass)(ExceptT ScriptError IO)()
              go opts = do
                sock ← socket (_port opts)
                ctxt ← newContext
