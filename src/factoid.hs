@@ -3,6 +3,7 @@
 {-# LANGUAGE NoImplicitPrelude      #-}
 {-# LANGUAGE OverloadedStrings      #-}
 {-# LANGUAGE QuasiQuotes            #-}
+{-# LANGUAGE TypeFamilies           #-}
 {-# LANGUAGE UnicodeSyntax          #-}
 
 import Base1
@@ -143,6 +144,13 @@ import System.Posix.Signals  ( Handler( Catch ), installHandler, keyboardSignal 
 
 ipPath ∷ AbsFile
 ipPath = [absfile|/run/current-system/sw/bin/ip|]
+
+----------------------------------------
+
+instance Ord κ ⇒ HasIndex (Map.Map κ ν) where
+  type Indexer (Map.Map κ ν) = κ
+  type Elem (Map.Map κ ν) = ν
+  index = Map.lookup
 
 ----------------------------------------
 --          UTILITY FUNCTIONS         --
@@ -418,11 +426,22 @@ data Context = Context { _cache         ∷ MVar Cache
                        , _wanIPTimer    ∷ MVar WanCheck
                          -- ^ the timer for a wanIP update
                        , _childProcs    ∷ MVar (Map.Map 𝕋 ProcessHandle)
-                       , _childThreads  ∷ MVar [AsyncTool ()]
+                       , _childThreads  ∷ MVar (Map.Map ThreadId (AsyncTool ()))
                        , _exit          ∷ MVar Word8
                        }
 
 --------------------
+
+addChildThread ∷ MonadIO μ ⇒ Context → 𝕋 → ReaderT Context IO () → μ ()
+addChildThread ctxt nm io = liftIO $ do
+  ast ← mkAsyncTool nm ⊳ async (readerRunT ctxt io)
+  modifyMVar_ (_childThreads ctxt) (return ∘ Map.insert (_threadID ast) ast)
+
+childThreads ∷ MonadIO μ ⇒ Context → μ [AsyncTool ()]
+childThreads ctxt = liftIO $ Map.elems ⊳ readMVar (_childThreads ctxt)
+
+childThreadName ∷ MonadIO μ ⇒ Context → ThreadId → μ (𝕄 𝕋)
+childThreadName ctxt tid = liftIO $ _name⊳⊳(tid !) ⊳ readMVar(_childThreads ctxt)
 
 newContext ∷ MonadIO μ ⇒ μ Context
 newContext = liftIO $ do
@@ -431,7 +450,7 @@ newContext = liftIO $ do
   lan_check       ← newEmptyMVar
   wan_check       ← WanCheck ⊳ async (return ()) ≫ newMVar
   child_procs     ← newMVar Map.empty
-  child_threads   ← newMVar [] -- Map.empty
+  child_threads   ← newMVar Map.empty
   lan_check_queue ← newMVar 𝓕
   let ctxt = Context { _cache         = cache
                      , _lanIPsTimer   = lan_check
@@ -448,6 +467,7 @@ newContext = liftIO $ do
 cacheResponse ∷ MonadIO μ ⇒ Context → LBS.ByteString → μ LBS.ByteString
 cacheResponse ctxt msg =
   let update f = liftIO $ f ctxt ⪼ return "OK"
+      fromCache ∷ (MonadIO μ, ToJSON α) ⇒ (Cache → α)  → μ LBS.ByteString
       fromCache f = encode ∘ f ⊳ liftIO (readMVar (_cache ctxt))
   in  case msg of
         "updateLanIPs" → update updateLanIPs
@@ -458,27 +478,21 @@ cacheResponse ctxt msg =
 
 ----------------------------------------
 
-childThread ∷ MonadIO μ ⇒ Context → 𝕋 → ReaderT Context IO () → μ ()
-childThread ctxt nm io = liftIO $ do
-  ast ← mkAsyncTool nm ⊳ async (readerRunT ctxt io)
-  modifyMVar_ (_childThreads ctxt) (\ asts → return $ ast : asts)
-
-----------------------------------------
-
 {-| fire off a number concurrent threads (each a MonadReader); log each as a
     childThread in the Context -}
 forks ∷ MonadIO μ ⇒ Context → NonEmpty (𝕋, ReaderT Context IO ()) → μ ()
-forks ctxt = liftIO ∘ mapM_ (uncurry $ childThread ctxt)
+forks ctxt = liftIO ∘ mapM_ (uncurry $ addChildThread ctxt)
 
 ----------------------------------------
 
-catchAll ∷ MonadIO μ ⇒ IO () → μ ()
-catchAll io =
+catchAll ∷ MonadIO μ ⇒ Context → IO () → μ ()
+catchAll ctxt io =
     let displaySomeException = displayException @SomeException
         catchE e = do
           tid ← myThreadId
-          error $ [fmt|Error in thread: %t %s|] (threadID tid)
-                                                (displaySomeException e)
+          tnm ← childThreadName ctxt tid
+          error $ [fmt|Error in thread: %t (%t) %s|] (threadID tid)
+                                  (tnm ⧏ "UNKNOWN") (displaySomeException e)
     in  liftIO $ catch io catchE
 
 ----------------------------------------
@@ -487,7 +501,7 @@ catchAll io =
     collecting -}
 fireAndForget' ∷ MonadIO μ ⇒ Context → 𝕋 → ReaderT Context IO () → μ ()
 fireAndForget' ctxt nm io =
-  childThread ctxt nm $ catchAll (runReaderT io ctxt)
+  addChildThread ctxt nm $ catchAll ctxt (runReaderT io ctxt)
 
 --------------------
 
@@ -516,7 +530,7 @@ cleanup ctxt = do
                       nm (pid ⧏ 0) dur
         𝓙 x → warn $ [fmt|process %t (%d) exited %w|] nm (pid ⧏ 0) x
     )
-  ts ← readMVar (_childThreads ctxt)
+  ts ← childThreads ctxt
   forM_ ts (\ ast → do
                let nm = [fmt|thread: %t %t|] (_name ast) (threadID $ _threadID ast)
                poll ast ≫ \ case
@@ -604,7 +618,7 @@ lanWatcher = do
       ipMonitor = proc (toString ipPath) ipArgs
 
   liftIO $ withStdoutProc ipMonitor
-    (\ ipm_out p → catchAll $ do
+    (\ ipm_out p → catchAll ctxt $ do
       debug "lanWatcher: created proc"
       -- XXX ip seems to be inheriting the listener port!
       let procName = T.intercalate " " $ "ip" : (T.pack ⊳ ipArgs)
