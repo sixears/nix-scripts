@@ -24,10 +24,8 @@ import Control.Concurrent.Async  ( Async, async, asyncThreadId )
 
 import qualified System.Timeout
 
-import Control.Concurrent       ( ThreadId,
-                                  forkIO, myThreadId, newEmptyMVar, threadDelay)
-import Control.Concurrent.Chan  ( Chan
-                                , getChanContents, newChan, writeChan )
+import Control.Concurrent       ( ThreadId, myThreadId,newEmptyMVar,threadDelay )
+import Control.Concurrent.Chan  ( Chan, getChanContents, newChan, writeChan )
 import Control.Concurrent.MVar  ( MVar, readMVar, modifyMVar_, newMVar,
                                   tryPutMVar, tryReadMVar )
 import Control.Exception        ( SomeException, catch, displayException )
@@ -174,18 +172,6 @@ readerRunT = flip runReaderT
 ⵎ ∷ ∀ α β η . β → ReaderT β η α → η α
 ⵎ = readerRunT
 
-data Complete = Complete | Incomplete
-data AsyncTool = AsyncTool { _name ∷ 𝕋, _threadID ∷ ThreadId
-                           , _cancel ∷ () → IO (), _poll ∷ () → IO Complete }
-
-mkAsyncTool ∷ 𝕋 → Async α → AsyncTool
-mkAsyncTool nm a =
-  AsyncTool { _name     = nm
-            , _threadID = asyncThreadId a
-            , _cancel   = const$ Async.cancel a
-            , _poll     = const$ maybe Incomplete (const Complete)⊳(Async.poll a)
-            }
-
 ------------------------------------------------------------
 --                        Pollable                        --
 ------------------------------------------------------------
@@ -201,6 +187,29 @@ class Cancellable α where
   cancel ∷ α → IO ()
   cancel' ∷ α → IO α
   cancel' a = cancel a ⪼ return a
+
+------------------------------------------------------------
+--                        AsyncTool                       --
+------------------------------------------------------------
+
+data Complete = Complete | Incomplete
+data AsyncTool = AsyncTool { _name ∷ 𝕋, _threadID ∷ ThreadId
+                           , _cancel ∷ () → IO (), _poll ∷ () → IO Complete }
+
+instance Cancellable AsyncTool where
+  cancel ast = _cancel ast $ ()
+
+-- XXX ? parameterize AsyncTool; replace use of astComplete with poll
+mkAsyncTool ∷ 𝕋 → Async α → AsyncTool
+mkAsyncTool nm a =
+  AsyncTool { _name     = nm
+            , _threadID = asyncThreadId a
+            , _cancel   = const$ Async.cancel a
+            , _poll     = const$ maybe Incomplete (const Complete)⊳(Async.poll a)
+            }
+
+astComplete ∷ MonadIO μ ⇒ AsyncTool → μ Complete
+astComplete ast = liftIO $ (_poll ast) ()
 
 ------------------------------------------------------------
 
@@ -488,8 +497,12 @@ cleanup ctxt = do
     )
   ts ← readMVar (_childThreads ctxt)
           -- XXX use poll & cancel here
-  forM_  (ts) (\ ast → do debug $ [fmt|closing thread: %t|] (_name ast)
-                          return ())
+  forM_ ts (\ ast → do
+               astComplete ast ≫ \ case
+                 Complete   → debug $ [fmt|ignoring closed thread: %t %w|] (_name ast) (_threadID ast)
+                 Incomplete → debug ([fmt|closing thread: %t %w|] (_name ast) (_threadID ast)) ⪼ cancel ast
+               return ()
+           )
   -- XXX 0 if instructed with "quit" command
   writeChan globalOutput (Warning, "cleanup complete: exiting",
                           𝓙 $ ExitFailure 255)
@@ -693,7 +706,7 @@ acceptor sock = do
   port ← liftIO $ socketPort sock
   warn $ [fmt|listening on port %d|] port
 
-  liftIO $ forkIO $ forever $ do
+  liftIO $ forever $ do
     (conn, addr) ← accept sock
 
     -- handle each connection in a separate thread
