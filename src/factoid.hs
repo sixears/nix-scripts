@@ -192,24 +192,30 @@ class Cancellable α where
 --                        AsyncTool                       --
 ------------------------------------------------------------
 
-data Complete = Complete | Incomplete
-data AsyncTool = AsyncTool { _name ∷ 𝕋, _threadID ∷ ThreadId
-                           , _cancel ∷ () → IO (), _poll ∷ () → IO Complete }
+data AsyncTool β = AsyncTool { _name     ∷ 𝕋
+                             , _threadID ∷ ThreadId
+                             , _cancel   ∷ () → IO ()
+                             , _poll     ∷ () → IO (𝕄 (𝔼 SomeException β))
+                             }
 
-instance Cancellable AsyncTool where
+----------
+
+instance Cancellable (AsyncTool β) where
   cancel ast = _cancel ast $ ()
 
--- XXX ? parameterize AsyncTool; replace use of astComplete with poll
-mkAsyncTool ∷ 𝕋 → Async α → AsyncTool
-mkAsyncTool nm a =
-  AsyncTool { _name     = nm
-            , _threadID = asyncThreadId a
-            , _cancel   = const$ Async.cancel a
-            , _poll     = const$ maybe Incomplete (const Complete)⊳(Async.poll a)
-            }
+----------
 
-astComplete ∷ MonadIO μ ⇒ AsyncTool → μ Complete
-astComplete ast = liftIO $ (_poll ast) ()
+instance Pollable (AsyncTool β) β where
+  poll ast = (_poll ast) ()
+
+--------------------
+
+mkAsyncTool ∷ 𝕋 → Async β → AsyncTool β
+mkAsyncTool nm ast = AsyncTool { _name     = nm
+                               , _threadID = asyncThreadId ast
+                               , _cancel   = const$ Async.cancel ast
+                               , _poll     = const $ Async.poll ast
+                               }
 
 ------------------------------------------------------------
 
@@ -365,14 +371,20 @@ globalOutput = unsafePerformIO $ newChan
 
 ----------------------------------------
 
-log ∷ MonadIO μ ⇒ Severity → 𝕋 → μ ()
-log sev t = liftIO $ do
+threadID ∷ ThreadId → 𝕋
+threadID tid =
   let removePrefix ∷ 𝕊 → 𝕊 → 𝕊
       removePrefix prefix str
         | prefix `isPrefixOf` str = drop_ (len_ prefix) str
         | otherwise = str
-  tid ← (removePrefix "ThreadId " ∘ show) ⊳ myThreadId
-  writeChan globalOutput (sev, [fmt|«%05s» |] tid ◇ t, 𝓝)
+  in  [fmt|«%05s»|] (removePrefix "ThreadId " $ show tid)
+
+----------------------------------------
+
+log ∷ MonadIO μ ⇒ Severity → 𝕋 → μ ()
+log sev t = liftIO $ do
+  tid ← threadID ⊳ myThreadId
+  writeChan globalOutput (sev, [fmt|%t %t|] tid t, 𝓝)
 
 --------------------
 
@@ -406,7 +418,7 @@ data Context = Context { _cache         ∷ MVar Cache
                        , _wanIPTimer    ∷ MVar WanCheck
                          -- ^ the timer for a wanIP update
                        , _childProcs    ∷ MVar (Map.Map 𝕋 ProcessHandle)
-                       , _childThreads  ∷ MVar [AsyncTool]
+                       , _childThreads  ∷ MVar [AsyncTool ()]
                        , _exit          ∷ MVar Word8
                        }
 
@@ -460,13 +472,22 @@ forks ctxt = liftIO ∘ mapM_ (uncurry $ childThread ctxt)
 
 ----------------------------------------
 
+catchAll ∷ MonadIO μ ⇒ IO () → μ ()
+catchAll io =
+    let displaySomeException = displayException @SomeException
+        catchE e = do
+          tid ← myThreadId
+          error $ [fmt|Error in thread: %t %s|] (threadID tid)
+                                                (displaySomeException e)
+    in  liftIO $ catch io catchE
+
+----------------------------------------
+
 {-| run some IO (that is a ReaderT) in a thread, without ever
     collecting -}
 fireAndForget' ∷ MonadIO μ ⇒ Context → 𝕋 → ReaderT Context IO () → μ ()
 fireAndForget' ctxt nm io =
-  let displaySomeException = displayException @SomeException
-      catchE e = error $ [fmt|Error in thread: %s|] $ displaySomeException e
-  in  childThread ctxt nm $ liftIO $ catch (runReaderT io ctxt) catchE
+  childThread ctxt nm $ catchAll (runReaderT io ctxt)
 
 --------------------
 
@@ -496,11 +517,11 @@ cleanup ctxt = do
         𝓙 x → warn $ [fmt|process %t (%d) exited %w|] nm (pid ⧏ 0) x
     )
   ts ← readMVar (_childThreads ctxt)
-          -- XXX use poll & cancel here
   forM_ ts (\ ast → do
-               astComplete ast ≫ \ case
-                 Complete   → debug $ [fmt|ignoring closed thread: %t %w|] (_name ast) (_threadID ast)
-                 Incomplete → debug ([fmt|closing thread: %t %w|] (_name ast) (_threadID ast)) ⪼ cancel ast
+               let nm = [fmt|thread: %t %t|] (_name ast) (threadID $ _threadID ast)
+               poll ast ≫ \ case
+                 𝓙 _ → debug $ [fmt|ignoring closed thread: %t|] nm
+                 𝓝   → debug ([fmt|closing thread: %t|] nm) ⪼ cancel ast
                return ()
            )
   -- XXX 0 if instructed with "quit" command
@@ -583,7 +604,7 @@ lanWatcher = do
       ipMonitor = proc (toString ipPath) ipArgs
 
   liftIO $ withStdoutProc ipMonitor
-    (\ ipm_out p → do
+    (\ ipm_out p → catchAll $ do
       debug "lanWatcher: created proc"
       -- XXX ip seems to be inheriting the listener port!
       let procName = T.intercalate " " $ "ip" : (T.pack ⊳ ipArgs)
