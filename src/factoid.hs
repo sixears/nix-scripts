@@ -18,17 +18,14 @@ import Data.Aeson  ( ToJSON( toJSON ), (.=), defaultOptions, encode,
 -- async -------------------------------
 
 import Control.Concurrent.Async  qualified as  Async
-import Control.Concurrent.Async  ( Async,
-                                   Concurrently( Concurrently, runConcurrently ),
-                                   async, asyncThreadId
-                                 )
+import Control.Concurrent.Async  ( Async, async, asyncThreadId )
 
 -- base --------------------------------
 
 import qualified System.Timeout
 
-import Control.Concurrent       ( ThreadId, forkIO, myThreadId, newEmptyMVar,
-                                  putMVar, threadDelay)
+import Control.Concurrent       ( ThreadId,
+                                  forkIO, myThreadId, newEmptyMVar, threadDelay)
 import Control.Concurrent.Chan  ( Chan
                                 , getChanContents, newChan, writeChan )
 import Control.Concurrent.MVar  ( MVar, readMVar, modifyMVar_, newMVar,
@@ -37,8 +34,8 @@ import Control.Exception        ( SomeException, catch, displayException )
 import Control.Monad            ( forever )
 import Data.Char                ( isUpper, toLower )
 import Data.List                ( dropWhile, isPrefixOf )
-import Data.Semigroup           ( sconcat )
 import Data.String              ( fromString )
+import Data.Tuple               ( uncurry )
 import GHC.Generics             ( Generic )
 import System.IO                ( BufferMode( NoBuffering ), Handle,
                                   IOMode( ReadMode, ReadWriteMode ),
@@ -179,21 +176,6 @@ readerRunT = flip runReaderT
 
 ----------------------------------------
 
-{-| fire off a number concurrent threads (each a MonadReader) -}
-forks ∷ MonadIO μ ⇒ Context → NonEmpty (ReaderT Context IO ()) → μ ()
-forks ctxt =
-  let async' ∷ IO α → IO (Async α)
-      async' io = do
-        debug $ [fmt|async'|]
-        a ← async io
-        let ast = mkAsyncTool "foo" a
-        debug $ [fmt|made async|]
-        modifyMVar_ (_childThreads ctxt) (\ asts → return $ ast : asts)
-        return a
-  in  ø ∘ async' ∘ runConcurrently ∘ sconcat ∘ fmap (Concurrently ∘ readerRunT ctxt)
-
-----------------------------------------
-
 {-| run some IO (that is a ReaderT) in a thread, without ever
     collecting -}
 fireAndForget' ∷ (MonadIO μ) ⇒ α → ReaderT α IO () → μ ()
@@ -267,7 +249,7 @@ ensureMVarSet mvar mkMVar update = do
     𝓙 _ → liftIO $ modifyMVar_ mvar $ \ l →
             poll l ≫ \ case
               𝓝   → update l -- async not completed
-              𝓙 _ → mkMVar -- some result; async has completed: make a new one
+              𝓙 _ → mkMVar   -- some result; async has completed: make a new one
 
 ------------------------------------------------------------
 --                        LanCheck                        --
@@ -469,6 +451,20 @@ cacheResponse ctxt msg =
         "lanIPs"       → fromCache _lanIPs
         "wanIP"        → fromCache _wanIP
         _              → return "Unknown request"
+
+----------------------------------------
+
+childThread ∷ MonadIO μ ⇒ Context → 𝕋 → ReaderT Context IO () → μ ()
+childThread ctxt nm io = liftIO $ do
+  ast ← mkAsyncTool nm ⊳ async (readerRunT ctxt io)
+  modifyMVar_ (_childThreads ctxt) (\ asts → return $ ast : asts)
+
+----------------------------------------
+
+{-| fire off a number concurrent threads (each a MonadReader); log each as a
+    childThread in the Context -}
+forks ∷ MonadIO μ ⇒ Context → NonEmpty (𝕋, ReaderT Context IO ()) → μ ()
+forks ctxt = liftIO ∘ mapM_ (uncurry $ childThread ctxt)
 
 ----------------------------------------
 
@@ -726,7 +722,8 @@ main = let desc ∷ 𝕋 = "monitor & report some facts to interested callers"
                -- XXX add handler for sigTERM
                _ ← installCtrlCHandler ctxt
 
-               forks ctxt $ lanWatcher :| [ ø ∘ ⵎ ctxt $ acceptor sock ]
+               forks ctxt $ ("lan watcher", lanWatcher) :|
+                            [ ("client acceptor", ø ∘ ⵎ ctxt $ acceptor sock) ]
                -- this has to run at the top level, to benefit from the StdMain
                -- log instance
                liftIO (getChanContents globalOutput) ≫ mapM_ logAndMaybeQuit
