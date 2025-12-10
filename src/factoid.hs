@@ -491,8 +491,10 @@ catchAll ctxt io =
         catchE e = do
           tid ← myThreadId
           tnm ← childThreadName ctxt tid
-          error $ [fmt|Error in thread: %t (%t) %s|] (threadID tid)
-                                  (tnm ⧏ "UNKNOWN") (displaySomeException e)
+          let tid' = threadID tid
+              tnm' = tnm ⧏ "UNKNOWN"
+              tex  = displaySomeException e
+          error $ [fmt|Error in thread: %t (%t): %s|] tid' tnm' tex
     in  liftIO $ catch io catchE
 
 ----------------------------------------
