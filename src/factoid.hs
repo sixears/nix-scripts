@@ -174,23 +174,6 @@ readerRunT = flip runReaderT
 ⵎ ∷ ∀ α β η . β → ReaderT β η α → η α
 ⵎ = readerRunT
 
-----------------------------------------
-
-{-| run some IO (that is a ReaderT) in a thread, without ever
-    collecting -}
-fireAndForget' ∷ (MonadIO μ) ⇒ α → ReaderT α IO () → μ ()
-fireAndForget' oc io =
-  let displaySomeException = displayException @SomeException
-      catchE e = error $ [fmt|Error in thread: %s|] $ displaySomeException e
-  in ø $ async $ catch (runReaderT io oc) catchE
-
---------------------
-
-{-| run some IO (that is a ReaderT) in a thread, without ever
-    collecting (suitable for an OutputChannel Reader context) -}
-fireAndForget ∷ (MonadIO μ, MonadReader α μ) ⇒ ReaderT α IO () → μ ()
-fireAndForget io = ask ≫ \ oc → fireAndForget' oc io
-
 data Complete = Complete | Incomplete
 data AsyncTool = AsyncTool { _name ∷ 𝕋, _threadID ∷ ThreadId
                            , _cancel ∷ () → IO (), _poll ∷ () → IO Complete }
@@ -468,6 +451,23 @@ forks ctxt = liftIO ∘ mapM_ (uncurry $ childThread ctxt)
 
 ----------------------------------------
 
+{-| run some IO (that is a ReaderT) in a thread, without ever
+    collecting -}
+fireAndForget' ∷ MonadIO μ ⇒ Context → 𝕋 → ReaderT Context IO () → μ ()
+fireAndForget' ctxt nm io =
+  let displaySomeException = displayException @SomeException
+      catchE e = error $ [fmt|Error in thread: %s|] $ displaySomeException e
+  in  childThread ctxt nm $ liftIO $ catch (runReaderT io ctxt) catchE
+
+--------------------
+
+{-| run some IO (that is a ReaderT) in a thread, without ever
+    collecting (suitable for an OutputChannel Reader context) -}
+fireAndForget ∷ (MonadIO μ,MonadReader Context μ)⇒𝕋 → ReaderT Context IO ()→μ ()
+fireAndForget nm io = ask ≫ \ ctxt → fireAndForget' ctxt nm io
+
+----------------------------------------
+
 cleanup ∷ Context → IO ()
 cleanup ctxt = do
 -- XXX terminate threads
@@ -487,6 +487,7 @@ cleanup ctxt = do
         𝓙 x → warn $ [fmt|process %t (%d) exited %w|] nm (pid ⧏ 0) x
     )
   ts ← readMVar (_childThreads ctxt)
+          -- XXX use poll & cancel here
   forM_  (ts) (\ ast → do debug $ [fmt|closing thread: %t|] (_name ast)
                           return ())
   -- XXX 0 if instructed with "quit" command
@@ -586,7 +587,7 @@ lanWatcher = do
 -- XXX single place to update _wanIP; to update _wanIPTimer
 updateWanIP ∷ MonadIO μ ⇒ Context → μ ()
 updateWanIP ctxt =
-  fireAndForget' ctxt updateWanIP_
+  fireAndForget' ctxt "updateWanIP" updateWanIP_
   where
     updateWanIP_ ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
     updateWanIP_ = do
@@ -693,10 +694,11 @@ acceptor sock = do
   warn $ [fmt|listening on port %d|] port
 
   liftIO $ forkIO $ forever $ do
-    (conn, _addr) ← accept sock
+    (conn, addr) ← accept sock
 
     -- handle each connection in a separate thread
-    flip runReaderT ctxt $ fireAndForget (handleClient conn)
+    let nm = [fmt|handle client %w|] addr
+    flip runReaderT ctxt $ fireAndForget nm (handleClient conn)
 
 ----------------------------------------
 
