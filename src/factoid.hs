@@ -27,8 +27,8 @@ import qualified System.Timeout
 
 import Control.Concurrent       ( ThreadId, myThreadId,newEmptyMVar,threadDelay )
 import Control.Concurrent.Chan  ( Chan, getChanContents, newChan, writeChan )
-import Control.Concurrent.MVar  ( MVar, readMVar, modifyMVar_, newMVar,
-                                  tryPutMVar, tryReadMVar )
+import Control.Concurrent.MVar  ( MVar, readMVar, modifyMVar_, newMVar, putMVar,
+                                  takeMVar, tryPutMVar, tryReadMVar )
 import Control.Exception        ( SomeException, catch, displayException )
 import Control.Monad            ( forever )
 import Data.Char                ( isUpper, toLower )
@@ -138,7 +138,7 @@ import Data.Time.Clock.POSIX  ( utcTimeToPOSIXSeconds )
 
 -- unix --------------------------------
 
-import System.Posix.Signals  ( Handler( Catch ), installHandler, keyboardSignal )
+import System.Posix.Signals  ( Handler( Catch ), Signal, installHandler, keyboardSignal, sigINT, sigQUIT, sigTERM )
 
 --------------------------------------------------------------------------------
 
@@ -434,8 +434,15 @@ data Context = Context { _cache         ∷ MVar Cache
 
 addChildThread ∷ MonadIO μ ⇒ Context → 𝕋 → ReaderT Context IO () → μ ()
 addChildThread ctxt nm io = liftIO $ do
-  ast ← mkAsyncTool nm ⊳ async (readerRunT ctxt io)
-  modifyMVar_ (_childThreads ctxt) (return ∘ Map.insert (_threadID ast) ast)
+  completed ← newEmptyMVar
+  let io' = io ⪼ liftIO (putMVar completed ())
+  ast ← mkAsyncTool nm ⊳ async (readerRunT ctxt io')
+  let tid = _threadID ast
+  modifyMVar_ (_childThreads ctxt) (return ∘ Map.insert tid ast)
+  ø $ async $ do
+    takeMVar completed
+    warn $ [fmt|unlisting thread: %t %t|] nm (threadID tid)
+    modifyMVar_ (_childThreads ctxt) (return ∘ Map.delete tid)
 
 childThreads ∷ MonadIO μ ⇒ Context → μ [AsyncTool ()]
 childThreads ctxt = liftIO $ Map.elems ⊳ readMVar (_childThreads ctxt)
@@ -474,6 +481,7 @@ cacheResponse ctxt msg =
         "updateWanIP"  → update updateWanIP
         "lanIPs"       → fromCache _lanIPs
         "wanIP"        → fromCache _wanIP
+        "quit"         → ø (async $ cleanup ctxt ExitSuccess) ⪼ return "OK"
         _              → return "Unknown request"
 
 ----------------------------------------
@@ -514,12 +522,9 @@ fireAndForget nm io = ask ≫ \ ctxt → fireAndForget' ctxt nm io
 
 ----------------------------------------
 
-cleanup ∷ Context → IO ()
-cleanup ctxt = do
--- XXX terminate threads
-
+cleanup ∷ Context → ExitCode → IO ()
+cleanup ctxt exit = do
   debug "Cleanup: terminating child processes..."
-  -- XXX delete procs as we terminate them, and thus update the MVar
   ps ← readMVar (_childProcs ctxt)
   debug $ [fmt|child procs: %d|] (len_ ps)
   forM_  (Map.toList ps) (\ (nm,p) → do
@@ -534,15 +539,14 @@ cleanup ctxt = do
     )
   ts ← childThreads ctxt
   forM_ ts (\ ast → do
-               let nm = [fmt|thread: %t %t|] (_name ast) (threadID $ _threadID ast)
+               let tid = threadID $ _threadID ast
+               let nm  = [fmt|thread: %t %t|] (_name ast) tid
                poll ast ≫ \ case
                  𝓙 _ → debug $ [fmt|ignoring closed thread: %t|] nm
                  𝓝   → debug ([fmt|closing thread: %t|] nm) ⪼ cancel ast
                return ()
            )
-  -- XXX 0 if instructed with "quit" command
-  writeChan globalOutput (Warning, "cleanup complete: exiting",
-                          𝓙 $ ExitFailure 255)
+  writeChan globalOutput (Warning, "cleanup complete: exiting", 𝓙 exit)
 
 -------------------- Process Utilities ---------------------
 
@@ -561,7 +565,6 @@ withStdoutProc create_proc action = do
 
 --------------------- LAN IPs Handling ---------------------
 
--- XXX check the timing in effect
 {-| call lanIPs, update the cache; if there's a change, set a timer to update
     the WanIP (unless there's no LanIPs: in which case, set the WanIP to 𝓝 -}
 updateLanIPs ∷ Context → IO ()
@@ -594,8 +597,6 @@ lanIPsTimer ctxt =
 ensureLanIPsTimer ∷ (MonadIO μ, MonadReader Context μ) ⇒ μ ()
 ensureLanIPsTimer = do
   ctxt ← ask
-  -- XXX this SECS 1 should be unified with other SECS 1
-  -- XXX use a LanCheck function rather than re-constructing it
   ensureMVarSet (_lanIPsTimer ctxt) (lanIPsTimer ctxt)
                 (\ l → do -- if there's already a check pending, signal to run
                           -- another straight after
@@ -632,9 +633,6 @@ lanWatcher = do
 --------------------- WAN IP Handling ----------------------
 
 {-| call lanIPs, update the cache -}
--- XXX update wanIP every minute after a lanIP change, until you get a real
--- result; every 10m thereafter
--- XXX single place to update _wanIP; to update _wanIPTimer
 updateWanIP ∷ MonadIO μ ⇒ Context → μ ()
 updateWanIP ctxt =
   fireAndForget' ctxt "updateWanIP" updateWanIP_
@@ -754,7 +752,13 @@ acceptor sock = do
 
 installCtrlCHandler ∷ MonadIO μ ⇒ Context → μ Handler
 installCtrlCHandler ctxt =
-  liftIO $ installHandler keyboardSignal (Catch (cleanup ctxt)) 𝓝
+  liftIO $ installHandler keyboardSignal(Catch(cleanup ctxt(ExitFailure 255))) 𝓝
+
+installSignalHandlers ∷ MonadIO μ ⇒ Context → Map.Map Signal ExitCode → μ ()
+installSignalHandlers ctxt hndlrs =
+  liftIO $
+    forM_ (Map.toList hndlrs) $  \ (sig, exit) →
+      installHandler sig (Catch(cleanup ctxt exit)) 𝓝
 
 logAndMaybeQuit ∷ (MonadIO μ, Default ω, MonadLog (Log ω) μ, ToExitCode ξ) ⇒
                   (Severity, 𝕋, 𝕄 ξ) → μ ()
@@ -763,7 +767,6 @@ logAndMaybeQuit (sev,msg,ext) =
     𝓝    → logIOT sev msg
     𝓙 xt → logIOT sev msg ⪼ ø (exitWith xt)
 
--- XXX use logging warn/info/debug
 main ∷ IO ()
 main = let desc ∷ 𝕋 = "monitor & report some facts to interested callers"
        in  getArgs ≫ stdMainNoDR @ScriptError desc parseOptions go
@@ -771,13 +774,17 @@ main = let desc ∷ 𝕋 = "monitor & report some facts to interested callers"
              go opts = do
                sock ← socket (_port opts)
                ctxt ← newContext
-               -- XXX add handler for sigTERM
-               _ ← installCtrlCHandler ctxt
+               ø $ installSignalHandlers ctxt
+                     (Map.fromList [ (sigTERM, ExitFailure 15)
+                                   , (sigQUIT, ExitFailure 3)
+                                   , (sigINT , ExitFailure 2)
+                                   ])
 
                forks ctxt $ ("lan watcher", lanWatcher) :|
                             [ ("client acceptor", ø ∘ ⵎ ctxt $ acceptor sock) ]
                -- this has to run at the top level, to benefit from the StdMain
-               -- log instance
+               -- log instance; the exit also needs to run in the main thread
+               -- lest only a child thread exits
                liftIO (getChanContents globalOutput) ≫ mapM_ logAndMaybeQuit
 
 -- that's all, folks! ----------------------------------------------------------
