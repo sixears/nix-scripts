@@ -258,6 +258,31 @@ downloadAndResizeImage imageUrl targetPath = do
 
 ----------------------------------------
 
+writeMarkdownFile tt sanitizedTitle ukCertificate titleResponse targetPath = do
+  liftIO $ TIO.writeFile targetPath "---\n"
+  liftIO $ writeProperty targetPath "imdb" tt
+  liftIO $ writeProperty targetPath "title" (T.concat ["\"", (primaryTitle titleResponse), "\""])
+  liftIO $ writeProperty targetPath "cover" (T.concat ["\"[[", sanitizedTitle, ".jpg]]\""])
+  liftIO $ writeProperty targetPath "UK Certificate" ("N/A" ⧐ ukCertificate)
+  liftIO $ writeProperty targetPath "summary" (T.concat ["\"", "" ⧐ plot titleResponse, "\""])
+  liftIO $ writeProperty targetPath "year" (T.pack $ Maybe.maybe "N/A" show (startYear titleResponse))
+  liftIO $ writeProperty targetPath "duration" (formatDuration (runtimeSeconds titleResponse))
+
+  case (interests titleResponse) of
+    Just is → liftIO $ writeProperties targetPath "interests" (map interestName is)
+    Nothing → return ()
+  case (stars titleResponse) of
+    Just ss → liftIO $ writeProperties targetPath "stars" (map displayName ss)
+    Nothing → return ()
+  case (directors titleResponse) of
+    Just ds → liftIO $ writeProperties targetPath "directors" (map displayName ds)
+    Nothing → return ()
+
+  liftIO $ TIO.appendFile targetPath "---\n"
+
+
+----------------------------------------
+
 -- | Process a single title
 -- processTitle ∷ 𝕋 → Options → IO ()
 processTitle ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => 𝕋 → Options → μ ()
@@ -305,27 +330,7 @@ processTitle tt opts = do
                   Maybe.listToMaybe $ map rating $ filter (\ certificate → code (country certificate) == "GB") (certificates certificateResponse)
                 Nothing → Nothing
 
-          -- Write the markdown file
-          liftIO $ TIO.writeFile targetPath "---\n"
-          liftIO $ writeProperty targetPath "imdb" tt
-          liftIO $ writeProperty targetPath "title" (T.concat ["\"", (primaryTitle titleResponse), "\""])
-          liftIO $ writeProperty targetPath "cover" (T.concat ["\"[[", sanitizedTitle, ".jpg]]\""])
-          liftIO $ writeProperty targetPath "UK Certificate" ("N/A" ⧐ ukCertificate)
-          liftIO $ writeProperty targetPath "summary" (T.concat ["\"", "" ⧐ plot titleResponse, "\""])
-          liftIO $ writeProperty targetPath "year" (T.pack $ Maybe.maybe "N/A" show (startYear titleResponse))
-          liftIO $ writeProperty targetPath "duration" (formatDuration (runtimeSeconds titleResponse))
-
-          case (interests titleResponse) of
-            Just is → liftIO $ writeProperties targetPath "interests" (map interestName is)
-            Nothing → return ()
-          case (stars titleResponse) of
-            Just ss → liftIO $ writeProperties targetPath "stars" (map displayName ss)
-            Nothing → return ()
-          case (directors titleResponse) of
-            Just ds → liftIO $ writeProperties targetPath "directors" (map displayName ds)
-            Nothing → return ()
-
-          liftIO $ TIO.appendFile targetPath "---\n"
+          writeMarkdownFile tt sanitizedTitle ukCertificate titleResponse targetPath
 
           -- Update people files
           Monad.forM_ (people opts) $ \ p → do
@@ -344,7 +349,7 @@ processTitle tt opts = do
 ----------------------------------------
 
 -- | Parse command line arguments
-parseArgs ∷ [String] → 𝔼 [𝕋] Options -- ([𝕋], [𝕋], [𝕋])
+parseArgs ∷ [String] → 𝔼 [𝕋] Options
 parseArgs args =
   let (tts, peopleArgs) = List.partition (\ arg → "tt" `List.isPrefixOf` arg && all Char.isDigit (drop 2 arg)) args
       (people, seen) = List.partition (\ arg → "+" `List.isPrefixOf` arg) peopleArgs
