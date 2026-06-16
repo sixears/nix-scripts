@@ -8,7 +8,7 @@ module Main where
 
 import Base1  hiding  ( head )
 
-import Prelude  ( Bool( True ), FilePath, (++), Int, all, div, drop, filter, head, lookup, map, mod, null, putStrLn )
+import Prelude  ( Bool( True ), Bounded, Enum, FilePath, (++), Int, all, div, drop, filter, head, lookup, map, mod, null, putStrLn, zip )
 
 
 import qualified Data.Aeson           as A
@@ -24,6 +24,7 @@ import qualified Data.Char            as Char
 import qualified Data.List            as List
 import qualified Data.Maybe           as Maybe
 import qualified Control.Monad        as Monad
+import qualified System.Exit          as Exit
 
 -- aeson -------------------------------
 
@@ -50,8 +51,8 @@ data TitleResponse = TitleResponse { primaryTitle   ∷ 𝕋
                                    , runtimeSeconds ∷ 𝕄 Int
                                    , plot           ∷ 𝕄 𝕋
                                    , interests      ∷ 𝕄 [Interest]
-                                   , stars          ∷ 𝕄 [Person]
-                                   , directors      ∷ 𝕄 [Person]
+                                   , stars          ∷ 𝕄 [Person']
+                                   , directors      ∷ 𝕄 [Person']
                                    }
   deriving Show
 
@@ -78,12 +79,12 @@ instance FromJSON Interest where
 
 ------------------------------------------------------------
 
-data Person = Person { displayName ∷ 𝕋 } deriving Show
+data Person' = Person' { displayName ∷ 𝕋 } deriving Show
 
 --------------------
 
-instance A.FromJSON Person where
-  parseJSON = withObject "Person" $ \ v → Person <$> v A..: "displayName"
+instance A.FromJSON Person' where
+  parseJSON = withObject "Person" $ \ v → Person' <$> v A..: "displayName"
 
 ------------------------------------------------------------
 
@@ -133,10 +134,44 @@ instance FromJSON Image where
 
 ------------------------------------------------------------
 
+-- | Person type for family members
+data Person = Abi | Xander | JJ | Mum
+  deriving (Show, Eq, Enum, Bounded)
+
+--------------------
+
+-- | Get the display name for a person
+personName ∷ Person → 𝕋
+personName Abi    = "Abi"
+personName Xander = "Xander"
+personName JJ     = "JJ"
+personName Mum    = "Mum"
+
+--------------------
+
+-- | Get the prefix for a person
+personPrefix ∷ Person → 𝕋
+personPrefix Abi    = "ax"
+personPrefix Xander = "xax"
+personPrefix JJ     = "jj"
+personPrefix Mum    = "hx"
+
+--------------------
+
+-- | Parse a string to a Person
+parsePerson ∷ 𝕋 → 𝕄 Person
+parsePerson "Abi" = Just Abi
+parsePerson "Xander" = Just Xander
+parsePerson "JJ" = Just JJ
+parsePerson "Mum" = Just Mum
+parsePerson _ = Nothing
+
+------------------------------------------------------------
+
 -- | Command line options
 data Options = Options { tts    :: [𝕋]
-                       , people :: [𝕋]
-                       , seen   :: [𝕋]
+                       , people :: [Person]
+                       , seen   :: [Person]
                        }
   deriving Show
 
@@ -208,8 +243,6 @@ downloadAndResizeImage imageUrl targetPath = do
   BSL.writeFile tempFilePath $ BSS.fromStrict body
 
   -- Use ImageMagick to resize the image
---  let magickCmd = Proc.proc "magick" [tempFilePath, "-resize", "600x400>", targetPath]
---  _ ← Proc.callCommand $ Proc.showCommandForUser magickCmd []
   Proc.callProcess "magick" [tempFilePath, "-resize", "600x400>", targetPath]
 
   -- Remove the temporary file
@@ -218,8 +251,6 @@ downloadAndResizeImage imageUrl targetPath = do
 ----------------------------------------
 
 -- | Process a single title
---processTitle ∷ 𝕋 → [𝕋] → [𝕋] → IO ()
---processTitle tt people seen = do
 processTitle ∷ 𝕋 → Options → IO ()
 processTitle tt opts = do
   let titleUrl = T.concat [imdbApiBase, tt]
@@ -286,41 +317,41 @@ processTitle tt opts = do
           TIO.appendFile targetPath "---\n"
 
           -- Update people files
-          let personMap = [("Abi", "ax"), ("Xander", "xax"), ("JJ", "jj"), ("Mum", "hx")]
+--          let personMap = [("Abi", "ax"), ("Xander", "xax"), ("JJ", "jj"), ("Mum", "hx")]
           Monad.forM_ (people opts) $ \ p → do
-            let pp = "" ⧐ lookup (T.unpack p) personMap
-            if null pp
-              then putStrLn $ "No pp for '" ++ T.unpack p ++ "'"
-              else do
-                let personDir = FP.combine "people" (T.unpack p)
-                Dir.createDirectoryIfMissing True personDir
-                let personFilePath = FP.combine personDir $ pp ++ "-wants-to-see.md"
-                TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
+            let pp = T.unpack (personPrefix p)
+                personDir = FP.combine "people" (T.unpack (personName p))
+            Dir.createDirectoryIfMissing True personDir
+            let personFilePath = FP.combine personDir $ pp ++ "-wants-to-see.md"
+            TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
 
           Monad.forM_ (seen opts) $ \ p → do
-            let pp = "" ⧐ lookup (T.unpack p) personMap
-            if null pp
-              then putStrLn $ "No pp for '" ++ T.unpack p ++ "'"
-              else do
-                let personDir = FP.combine "people" (T.unpack p)
-                Dir.createDirectoryIfMissing True personDir
-                let personFilePath = FP.combine personDir "has-seen.md"
-                TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
+            let personDir = FP.combine "people" (T.unpack (personName p))
+            Dir.createDirectoryIfMissing True personDir
+            let personFilePath = FP.combine personDir "has-seen.md"
+            TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
 
 ----------------------------------------
 
 -- | Parse command line arguments
-parseArgs ∷ [String] → Options -- ([𝕋], [𝕋], [𝕋])
+parseArgs ∷ [String] → 𝔼 [𝕋] Options -- ([𝕋], [𝕋], [𝕋])
 parseArgs args =
   let (tts, peopleArgs) = List.partition (\ arg → "tt" `List.isPrefixOf` arg && all Char.isDigit (drop 2 arg)) args
       (people, seen) = List.partition (\ arg → "+" `List.isPrefixOf` arg) peopleArgs
-      parsedPeople = map (T.pack . drop 1) people
-      parsedSeen = map (T.pack . drop 1) seen
---  in (map T.pack tts, parsedPeople, parsedSeen)
-  in Options { tts = map T.pack tts
-             , people = parsedPeople
-             , seen = parsedSeen
-             }
+      rawPeople = map (T.pack . drop 1) people
+      rawSeen = map (T.pack . drop 1) seen
+      parsedPeople = map parsePerson rawPeople
+      parsedSeen = map parsePerson rawSeen
+      unknownPeople = [name | (name, Nothing) ← zip rawPeople parsedPeople]
+      unknownSeen = [name | (name, Nothing) ← zip rawSeen parsedSeen]
+      allUnknown = unknownPeople ++ unknownSeen
+  in if null allUnknown
+     then Right $ Options { tts = map T.pack tts
+                           , people = Maybe.catMaybes parsedPeople
+                           , seen = Maybe.catMaybes parsedSeen
+                           }
+     else Left allUnknown
+
 ----------------------------------------
 
 -- | Main function
@@ -330,14 +361,19 @@ main = do
   if null args
     then putStrLn "usage: imdb <tt...>"
     else do
-      let opts = parseArgs args
-      if null (tts opts)
-        then putStrLn "no titles provided"
-        else do
-          -- Check if movies directory exists
-          moviesDirExists ← Dir.doesDirectoryExist "movies"
-          if not moviesDirExists
-            then putStrLn "run this in an obsidian movies-info dir"
-            else Monad.forM_ (tts opts) $ \ tt → processTitle tt opts
+      case parseArgs args of
+        Left unknown → do
+          putStrLn "Error: Unknown person names:"
+          mapM_ (\name → TIO.putStrLn (T.concat ["  ", name])) unknown
+          Exit.exitFailure
+        Right opts → do
+          if null (tts opts)
+          then putStrLn "no titles provided"
+          else do
+            -- Check if movies directory exists
+            moviesDirExists ← Dir.doesDirectoryExist "movies"
+            if not moviesDirExists
+              then putStrLn "run this in an obsidian movies-info dir"
+              else Monad.forM_ (tts opts) $ \ tt → processTitle tt opts
 
 -- that's all, folks! ----------------------------------------------------------
