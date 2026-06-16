@@ -1,6 +1,7 @@
 -- IMDB to Obsidian Haskell Script
 -- Uses ImageMagick (`magick`) for image resizing via command line
 
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -8,7 +9,7 @@ module Main where
 
 import Base1
 
-import Prelude  ( Bounded, Enum, FilePath, (++), Int, all, div, drop, filter, map, mod, null, putStrLn, zip )
+import Prelude  ( FilePath, Int, all, div, drop, filter, map, mod, null, putStrLn )
 
 
 import qualified Data.Aeson           as A
@@ -31,6 +32,14 @@ import qualified System.Exit          as Exit
 import Data.Aeson  ( FromJSON, withObject )
 
 -- base --------------------------------
+
+import Control.Exception  ( SomeException, throwIO )
+import Data.List          ( zip )
+
+-- monaderror-io -----------------------
+
+import MonadError           ( eitherME )
+import MonadError.IO.Error  ( IOError, throwUserError )
 
 -- text --------------------------------
 
@@ -136,7 +145,7 @@ instance FromJSON Image where
 
 -- | Person type for family members
 data Person = Abi | Xander | JJ | Mum
-  deriving (Show, Eq, Enum, Bounded)
+  deriving (Show, Eq)
 
 --------------------
 
@@ -178,22 +187,28 @@ data Options = Options { tts    :: [𝕋]
 ------------------------------------------------------------
 
 -- | Fetch JSON from a URL
-fetchJson ∷ A.FromJSON a => 𝕋 → IO (𝕄 a)
+-- fetchJson ∷ A.FromJSON a => 𝕋 → IO (𝕄 a)
+fetchJson ∷ (MonadIO μ, AsIOError ε, MonadError ε μ, A.FromJSON a) => 𝕋 → μ (𝕄 a)
 fetchJson url = do
-  request ← HTTP.parseRequest $ T.unpack url
+  request ← eitherME (userE ∘ show) $ HTTP.parseRequest $ T.unpack url
   response ← HTTP.httpBS request
   let status = HTTP.getResponseStatusCode response
   if status == 200
-    then do
-      let body = HTTP.getResponseBody response
-      case A.eitherDecode $ BSS.fromStrict body of
-        Left err → do
-          putStrLn $ "Error decoding JSON: " ++ err
-          return Nothing
-        Right result → return $ Just result
-    else do
-      putStrLn $ "HTTP error: " ++ show status
-      return Nothing
+  then do
+    let body = HTTP.getResponseBody response
+    case A.eitherDecode $ BSS.fromStrict body of
+      Left err → -- do
+        throwUserError $ "Error decoding JSON: " ◇ err
+--          return Nothing
+      Right result → return $ Just result
+  else do
+    throwUserError $ "HTTP error: " ◇ show status
+--      return Nothing
+
+-- XXX be rid of this!
+fetchJson' url = ѥ @IOError (fetchJson url) ≫ \ case
+                   𝓛 e → throwIO e -- XXX
+                   𝓡 r → return r
 
 ----------------------------------------
 
@@ -211,7 +226,7 @@ formatDuration ∷ 𝕄 Int → 𝕋
 formatDuration (Just seconds) =
   let hours = seconds `div` 3600
       minutes = (seconds `mod` 3600) `div` 60
-  in T.pack $ show hours ++ "h" ++ show minutes ++ "m"
+  in T.pack $ show hours ◇ "h" ◇ show minutes ◇ "m"
 formatDuration Nothing = "N/A"
 
 ----------------------------------------
@@ -239,7 +254,7 @@ downloadAndResizeImage imageUrl targetPath = do
   request ← HTTP.parseRequest $ T.unpack imageUrl
   response ← HTTP.httpBS request
   let body = HTTP.getResponseBody response
-  let tempFilePath = targetPath ++ ".tmp"
+  let tempFilePath = targetPath ◇ ".tmp"
   BSL.writeFile tempFilePath $ BSS.fromStrict body
 
   -- Use ImageMagick to resize the image
@@ -254,35 +269,39 @@ downloadAndResizeImage imageUrl targetPath = do
 processTitle ∷ 𝕋 → Options → IO ()
 processTitle tt opts = do
   let titleUrl = T.concat [imdbApiBase, tt]
-  maybeTitleResponse ← fetchJson titleUrl
+--  maybeTitleResponse ← fetchJson titleUrl
+  maybeTitleResponse ← fetchJson' titleUrl
+--  maybeTitleResponse ← ѥ @IOError (fetchJson titleUrl) ≫ \ case
+--    𝓛 e → throwIO e -- XXX
+--    𝓡 r → return r
   case maybeTitleResponse of
-    Nothing → putStrLn $ "Failed to fetch title: " ++ T.unpack tt
+    Nothing → putStrLn $ "Failed to fetch title: " ◇ T.unpack tt
     Just titleResponse → do
       let sanitizedTitle = sanitizeTitle (primaryTitle titleResponse)
-          targetPath = FP.combine "movies" $ T.unpack sanitizedTitle ++ ".md"
+          targetPath = FP.combine "movies" $ T.unpack sanitizedTitle ◇ ".md"
           attachmentDir = FP.combine "movies" "_attachments"
-          imageTargetPath = FP.combine attachmentDir $ T.unpack sanitizedTitle ++ ".jpg"
+          imageTargetPath = FP.combine attachmentDir $ T.unpack sanitizedTitle ◇ ".jpg"
 
       -- Check if the file already exists
       exists ← Dir.doesFileExist targetPath
       if exists
-        then putStrLn $ "Already exists: " ++ targetPath ++ " (" ++ T.unpack tt ++ ")"
+        then putStrLn $ "Already exists: " ◇ targetPath ◇ " (" ◇ T.unpack tt ◇ ")"
         else do
-          putStrLn $ "Found title: " ++ T.unpack (primaryTitle titleResponse)
+          putStrLn $ "Found title: " ◇ T.unpack (primaryTitle titleResponse)
 
           -- Create attachments directory if it doesn't exist
           Dir.createDirectoryIfMissing 𝓣 attachmentDir
 
           -- Fetch and process images
           let imagesUrl = T.concat [imdbApiBase, tt, "/images"]
-          maybeImageResponse ← fetchJson imagesUrl
+          maybeImageResponse ← fetchJson' imagesUrl
           case maybeImageResponse of
             Just imageResponse → do
               let posterImages = filter (\ image → (imageType image) == "poster") (images imageResponse)
               if null posterImages
                 then putStrLn "No images found"
                 else do
-                  putStrLn $ "Writing " ++ imageTargetPath ++ "..."
+                  putStrLn $ "Writing " ◇ imageTargetPath ◇ "..."
                   case head posterImages of
                     𝓝    → putStrLn "no image found"
                     𝓙 pI → downloadAndResizeImage (url pI) imageTargetPath
@@ -290,7 +309,7 @@ processTitle tt opts = do
 
           -- Fetch certificate
           let certificateUrl = T.concat [imdbApiBase, tt, "/certificates"]
-          maybeCertificateResponse ← fetchJson certificateUrl
+          maybeCertificateResponse ← fetchJson' certificateUrl
           let ukCertificate = case maybeCertificateResponse of
                 Just certificateResponse →
                   Maybe.listToMaybe $ map rating $ filter (\ certificate → code (country certificate) == "GB") (certificates certificateResponse)
@@ -324,7 +343,7 @@ processTitle tt opts = do
             let pp = T.unpack (personPrefix p)
                 personDir = FP.combine "people" (T.unpack (personName p))
             Dir.createDirectoryIfMissing 𝓣 personDir
-            let personFilePath = FP.combine personDir $ pp ++ "-wants-to-see.md"
+            let personFilePath = FP.combine personDir $ pp ◇ "-wants-to-see.md"
             TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
 
           Monad.forM_ (seen opts) $ \ p → do
@@ -346,7 +365,7 @@ parseArgs args =
       parsedSeen = map parsePerson rawSeen
       unknownPeople = [name | (name, Nothing) ← zip rawPeople parsedPeople]
       unknownSeen = [name | (name, Nothing) ← zip rawSeen parsedSeen]
-      allUnknown = unknownPeople ++ unknownSeen
+      allUnknown = unknownPeople ◇ unknownSeen
   in if null allUnknown
      then Right $ Options { tts = map T.pack tts
                            , people = Maybe.catMaybes parsedPeople
