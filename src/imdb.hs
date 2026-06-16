@@ -9,6 +9,7 @@ module Main where
 
 import Base1
 
+-- putStrLn => log, or error?
 import Prelude  ( FilePath, Int, all, div, drop, filter, map, mod, null, putStrLn )
 
 
@@ -33,8 +34,7 @@ import Data.Aeson  ( FromJSON, withObject )
 
 -- base --------------------------------
 
-import Control.Exception  ( SomeException, throwIO )
-import Data.List          ( zip )
+import Data.List  ( zip )
 
 -- monaderror-io -----------------------
 
@@ -203,11 +203,6 @@ fetchJson url = do
   else do
     throwUserError $ "HTTP error: " ◇ show status
 
--- XXX be rid of this!
-fetchJson' url = ѥ @IOError (fetchJson url) ≫ \ case
-                   𝓛 e → throwIO e -- XXX
-                   𝓡 r → return r
-
 ----------------------------------------
 
 -- | Sanitize title for filename
@@ -266,15 +261,11 @@ downloadAndResizeImage imageUrl targetPath = do
 -- | Process a single title
 -- processTitle ∷ 𝕋 → Options → IO ()
 processTitle ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => 𝕋 → Options → μ ()
-processTitle tt opts = liftIO $ do
+processTitle tt opts = do
   let titleUrl = T.concat [imdbApiBase, tt]
---  maybeTitleResponse ← fetchJson titleUrl
-  maybeTitleResponse ← fetchJson' titleUrl
---  maybeTitleResponse ← ѥ @IOError (fetchJson titleUrl) ≫ \ case
---    𝓛 e → throwIO e -- XXX
---    𝓡 r → return r
+  maybeTitleResponse ← fetchJson titleUrl
   case maybeTitleResponse of
-    Nothing → putStrLn $ "Failed to fetch title: " ◇ T.unpack tt
+    Nothing → liftIO $ putStrLn $ "Failed to fetch title: " ◇ T.unpack tt
     Just titleResponse → do
       let sanitizedTitle = sanitizeTitle (primaryTitle titleResponse)
           targetPath = FP.combine "movies" $ T.unpack sanitizedTitle ◇ ".md"
@@ -282,74 +273,73 @@ processTitle tt opts = liftIO $ do
           imageTargetPath = FP.combine attachmentDir $ T.unpack sanitizedTitle ◇ ".jpg"
 
       -- Check if the file already exists
-      exists ← Dir.doesFileExist targetPath
+      exists ← liftIO $ Dir.doesFileExist targetPath
       if exists
-        then putStrLn $ "Already exists: " ◇ targetPath ◇ " (" ◇ T.unpack tt ◇ ")"
+        then liftIO $ putStrLn $ "Already exists: " ◇ targetPath ◇ " (" ◇ T.unpack tt ◇ ")"
         else do
-          putStrLn $ "Found title: " ◇ T.unpack (primaryTitle titleResponse)
+          liftIO $ putStrLn $ "Found title: " ◇ T.unpack (primaryTitle titleResponse)
 
           -- Create attachments directory if it doesn't exist
-          Dir.createDirectoryIfMissing 𝓣 attachmentDir
+          liftIO $ Dir.createDirectoryIfMissing 𝓣 attachmentDir
 
           -- Fetch and process images
           let imagesUrl = T.concat [imdbApiBase, tt, "/images"]
-          maybeImageResponse ← fetchJson' imagesUrl
+          maybeImageResponse ← fetchJson imagesUrl
           case maybeImageResponse of
             Just imageResponse → do
               let posterImages = filter (\ image → (imageType image) == "poster") (images imageResponse)
               if null posterImages
-                then putStrLn "No images found"
+                then liftIO $ putStrLn "No images found"
                 else do
-                  putStrLn $ "Writing " ◇ imageTargetPath ◇ "..."
+                  liftIO $ putStrLn $ "Writing " ◇ imageTargetPath ◇ "..."
                   case head posterImages of
-                    𝓝    → putStrLn "no image found"
-                    𝓙 pI → downloadAndResizeImage (url pI) imageTargetPath
-            _ → putStrLn "Failed to fetch images"
+                    𝓝    → liftIO $ putStrLn "no image found"
+                    𝓙 pI → liftIO $ downloadAndResizeImage (url pI) imageTargetPath
+            _ → liftIO $ putStrLn "Failed to fetch images"
 
           -- Fetch certificate
           let certificateUrl = T.concat [imdbApiBase, tt, "/certificates"]
-          maybeCertificateResponse ← fetchJson' certificateUrl
+          maybeCertificateResponse ← fetchJson certificateUrl
           let ukCertificate = case maybeCertificateResponse of
                 Just certificateResponse →
                   Maybe.listToMaybe $ map rating $ filter (\ certificate → code (country certificate) == "GB") (certificates certificateResponse)
                 Nothing → Nothing
 
           -- Write the markdown file
-          TIO.writeFile targetPath "---\n"
-          writeProperty targetPath "imdb" tt
-          writeProperty targetPath "title" (T.concat ["\"", (primaryTitle titleResponse), "\""])
-          writeProperty targetPath "cover" (T.concat ["\"[[", sanitizedTitle, ".jpg]]\""])
-          writeProperty targetPath "UK Certificate" ("N/A" ⧐ ukCertificate)
-          writeProperty targetPath "summary" (T.concat ["\"", "" ⧐ plot titleResponse, "\""])
-          writeProperty targetPath "year" (T.pack $ Maybe.maybe "N/A" show (startYear titleResponse))
-          writeProperty targetPath "duration" (formatDuration (runtimeSeconds titleResponse))
+          liftIO $ TIO.writeFile targetPath "---\n"
+          liftIO $ writeProperty targetPath "imdb" tt
+          liftIO $ writeProperty targetPath "title" (T.concat ["\"", (primaryTitle titleResponse), "\""])
+          liftIO $ writeProperty targetPath "cover" (T.concat ["\"[[", sanitizedTitle, ".jpg]]\""])
+          liftIO $ writeProperty targetPath "UK Certificate" ("N/A" ⧐ ukCertificate)
+          liftIO $ writeProperty targetPath "summary" (T.concat ["\"", "" ⧐ plot titleResponse, "\""])
+          liftIO $ writeProperty targetPath "year" (T.pack $ Maybe.maybe "N/A" show (startYear titleResponse))
+          liftIO $ writeProperty targetPath "duration" (formatDuration (runtimeSeconds titleResponse))
 
           case (interests titleResponse) of
-            Just is → writeProperties targetPath "interests" (map interestName is)
+            Just is → liftIO $ writeProperties targetPath "interests" (map interestName is)
             Nothing → return ()
           case (stars titleResponse) of
-            Just ss → writeProperties targetPath "stars" (map displayName ss)
+            Just ss → liftIO $ writeProperties targetPath "stars" (map displayName ss)
             Nothing → return ()
           case (directors titleResponse) of
-            Just ds → writeProperties targetPath "directors" (map displayName ds)
+            Just ds → liftIO $ writeProperties targetPath "directors" (map displayName ds)
             Nothing → return ()
 
-          TIO.appendFile targetPath "---\n"
+          liftIO $ TIO.appendFile targetPath "---\n"
 
           -- Update people files
---          let personMap = [("Abi", "ax"), ("Xander", "xax"), ("JJ", "jj"), ("Mum", "hx")]
           Monad.forM_ (people opts) $ \ p → do
             let pp = T.unpack (personPrefix p)
                 personDir = FP.combine "people" (T.unpack (personName p))
-            Dir.createDirectoryIfMissing 𝓣 personDir
+            liftIO $ Dir.createDirectoryIfMissing 𝓣 personDir
             let personFilePath = FP.combine personDir $ pp ◇ "-wants-to-see.md"
-            TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
+            liftIO $ TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
 
           Monad.forM_ (seen opts) $ \ p → do
             let personDir = FP.combine "people" (T.unpack (personName p))
-            Dir.createDirectoryIfMissing 𝓣 personDir
+            liftIO $ Dir.createDirectoryIfMissing 𝓣 personDir
             let personFilePath = FP.combine personDir "has-seen.md"
-            TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
+            liftIO $ TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
 
 ----------------------------------------
 
