@@ -1,6 +1,7 @@
 -- IMDB to Obsidian Haskell Script
 -- Uses ImageMagick (`magick`) for image resizing via command line
 
+{-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -27,14 +28,18 @@ import qualified Data.List            as List
 import qualified Data.Maybe           as Maybe
 import qualified Control.Monad        as Monad
 import qualified System.Exit          as Exit
+import qualified Data.Yaml                    as Yaml
+import qualified Data.Text                    as T
 
 -- aeson -------------------------------
 
-import Data.Aeson  ( FromJSON, withObject )
+import Data.Aeson  ( FromJSON, ToJSON,
+                     defaultOptions, omitNothingFields, genericToJSON, withObject )
 
 -- base --------------------------------
 
-import Data.List  ( zip )
+import Data.List     ( zip )
+import GHC.Generics  ( Generic )
 
 -- monaderror-io -----------------------
 
@@ -43,7 +48,8 @@ import MonadError.IO.Error  ( IOError, throwUserError )
 
 -- text --------------------------------
 
-import qualified  Data.Text  as  T
+import Data.Text.Encoding        ( decodeUtf8With )
+import Data.Text.Encoding.Error  ( lenientDecode )
 
 --------------------------------------------------------------------------------
 
@@ -140,6 +146,24 @@ data Image = Image { imageType ∷ 𝕋 , url ∷ 𝕋 } deriving Show
 
 instance FromJSON Image where
   parseJSON = withObject "Image" $ \ v → do Image <$> v A..: "type" <*> v A..: "url"
+
+------------------------------------------------------------
+
+data FrontMatter = FrontMatter { imdb          ∷ 𝕋
+                               , title         ∷ 𝕋
+                               , cover         ∷ 𝕋
+                               , ukCertificate ∷ 𝕋
+                               , summary       ∷ 𝕋
+                               , year          ∷ 𝕋
+                               , duration      ∷ 𝕋
+                               , interests'    ∷ 𝕄 [𝕋]
+                               , stars'        ∷ 𝕄 [𝕋]
+                               , directors'    ∷ 𝕄 [𝕋]
+                               }
+  deriving Generic
+
+instance ToJSON FrontMatter where
+  toJSON = genericToJSON defaultOptions { omitNothingFields = 𝓣 }
 
 ------------------------------------------------------------
 
@@ -258,27 +282,25 @@ downloadAndResizeImage imageUrl targetPath = do
 
 ----------------------------------------
 
-writeMarkdownFile tt sanitizedTitle ukCertificate titleResponse targetPath = do
-  liftIO $ TIO.writeFile targetPath "---\n"
-  liftIO $ writeProperty targetPath "imdb" tt
-  liftIO $ writeProperty targetPath "title" (T.concat ["\"", (primaryTitle titleResponse), "\""])
-  liftIO $ writeProperty targetPath "cover" (T.concat ["\"[[", sanitizedTitle, ".jpg]]\""])
-  liftIO $ writeProperty targetPath "UK Certificate" ("N/A" ⧐ ukCertificate)
-  liftIO $ writeProperty targetPath "summary" (T.concat ["\"", "" ⧐ plot titleResponse, "\""])
-  liftIO $ writeProperty targetPath "year" (T.pack $ Maybe.maybe "N/A" show (startYear titleResponse))
-  liftIO $ writeProperty targetPath "duration" (formatDuration (runtimeSeconds titleResponse))
 
-  case (interests titleResponse) of
-    Just is → liftIO $ writeProperties targetPath "interests" (map interestName is)
-    Nothing → return ()
-  case (stars titleResponse) of
-    Just ss → liftIO $ writeProperties targetPath "stars" (map displayName ss)
-    Nothing → return ()
-  case (directors titleResponse) of
-    Just ds → liftIO $ writeProperties targetPath "directors" (map displayName ds)
-    Nothing → return ()
+writeMarkdownFile ∷ MonadIO μ => 𝕋 → 𝕋 → 𝕄 𝕋 → TitleResponse → FilePath → μ ()
+writeMarkdownFile tt sanitizedTitle ukCert titleResponse targetPath = do
+  let fm = FrontMatter
+        { imdb          = tt
+        , title         = primaryTitle titleResponse
+        , cover         = T.concat ["[[", sanitizedTitle, ".jpg]]"]
+        , ukCertificate = "N/A" ⧐ ukCert
+        , summary       = ""    ⧐ plot titleResponse
+        , year          = maybe "N/A" (T.pack . show) (startYear titleResponse)
+        , duration      = formatDuration (runtimeSeconds titleResponse)
+        , interests'    = map interestName ⊳ interests titleResponse
+        , stars'        = map displayName  ⊳ stars     titleResponse
+        , directors'    = map displayName  ⊳ directors titleResponse
+        }
 
-  liftIO $ TIO.appendFile targetPath "---\n"
+      yamlContent = "---\n" ◇ decodeUtf8With lenientDecode (Yaml.encode fm) ◇ "---\n"
+
+  liftIO $ TIO.writeFile targetPath yamlContent
 
 
 ----------------------------------------
