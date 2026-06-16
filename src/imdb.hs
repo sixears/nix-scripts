@@ -188,7 +188,7 @@ data Options = Options { tts    :: [𝕋]
 
 -- | Fetch JSON from a URL
 -- fetchJson ∷ A.FromJSON a => 𝕋 → IO (𝕄 a)
-fetchJson ∷ (MonadIO μ, AsIOError ε, MonadError ε μ, A.FromJSON a) => 𝕋 → μ (𝕄 a)
+fetchJson ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, A.FromJSON a) => 𝕋 → μ (𝕄 a)
 fetchJson url = do
   request ← eitherME (userE ∘ show) $ HTTP.parseRequest $ T.unpack url
   response ← HTTP.httpBS request
@@ -197,13 +197,11 @@ fetchJson url = do
   then do
     let body = HTTP.getResponseBody response
     case A.eitherDecode $ BSS.fromStrict body of
-      Left err → -- do
+      Left err →
         throwUserError $ "Error decoding JSON: " ◇ err
---          return Nothing
       Right result → return $ Just result
   else do
     throwUserError $ "HTTP error: " ◇ show status
---      return Nothing
 
 -- XXX be rid of this!
 fetchJson' url = ѥ @IOError (fetchJson url) ≫ \ case
@@ -266,8 +264,9 @@ downloadAndResizeImage imageUrl targetPath = do
 ----------------------------------------
 
 -- | Process a single title
-processTitle ∷ 𝕋 → Options → IO ()
-processTitle tt opts = do
+-- processTitle ∷ 𝕋 → Options → IO ()
+processTitle ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => 𝕋 → Options → μ ()
+processTitle tt opts = liftIO $ do
   let titleUrl = T.concat [imdbApiBase, tt]
 --  maybeTitleResponse ← fetchJson titleUrl
   maybeTitleResponse ← fetchJson' titleUrl
@@ -395,6 +394,8 @@ main = do
             moviesDirExists ← Dir.doesDirectoryExist "movies"
             if not moviesDirExists
               then putStrLn "run this in an obsidian movies-info dir"
-              else Monad.forM_ (tts opts) $ \ tt → processTitle tt opts
+              else Monad.forM_ (tts opts) $ \ tt → ѥ (processTitle @IOError tt opts) ≫ \ case
+                                              𝓛 e → Exit.exitFailure -- XXX REASON/error
+                                              𝓡 r → return r
 
 -- that's all, folks! ----------------------------------------------------------
