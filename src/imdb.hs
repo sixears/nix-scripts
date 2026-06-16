@@ -6,9 +6,9 @@
 
 module Main where
 
-import Base1  hiding  ( head )
+import Base1
 
-import Prelude  ( Bool( True ), Bounded, Enum, FilePath, (++), Int, all, div, drop, filter, head, lookup, map, mod, null, putStrLn, zip )
+import Prelude  ( Bounded, Enum, FilePath, (++), Int, all, div, drop, filter, map, mod, null, putStrLn, zip )
 
 
 import qualified Data.Aeson           as A
@@ -271,7 +271,7 @@ processTitle tt opts = do
           putStrLn $ "Found title: " ++ T.unpack (primaryTitle titleResponse)
 
           -- Create attachments directory if it doesn't exist
-          Dir.createDirectoryIfMissing True attachmentDir
+          Dir.createDirectoryIfMissing 𝓣 attachmentDir
 
           -- Fetch and process images
           let imagesUrl = T.concat [imdbApiBase, tt, "/images"]
@@ -283,7 +283,9 @@ processTitle tt opts = do
                 then putStrLn "No images found"
                 else do
                   putStrLn $ "Writing " ++ imageTargetPath ++ "..."
-                  downloadAndResizeImage (url $ head posterImages) imageTargetPath
+                  case head posterImages of
+                    𝓝    → putStrLn "no image found"
+                    𝓙 pI → downloadAndResizeImage (url pI) imageTargetPath
             _ → putStrLn "Failed to fetch images"
 
           -- Fetch certificate
@@ -321,13 +323,13 @@ processTitle tt opts = do
           Monad.forM_ (people opts) $ \ p → do
             let pp = T.unpack (personPrefix p)
                 personDir = FP.combine "people" (T.unpack (personName p))
-            Dir.createDirectoryIfMissing True personDir
+            Dir.createDirectoryIfMissing 𝓣 personDir
             let personFilePath = FP.combine personDir $ pp ++ "-wants-to-see.md"
             TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
 
           Monad.forM_ (seen opts) $ \ p → do
             let personDir = FP.combine "people" (T.unpack (personName p))
-            Dir.createDirectoryIfMissing True personDir
+            Dir.createDirectoryIfMissing 𝓣 personDir
             let personFilePath = FP.combine personDir "has-seen.md"
             TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
 
