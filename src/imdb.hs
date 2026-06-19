@@ -11,10 +11,8 @@ module Main where
 import Base1
 
 -- putStrLn => log, or error?
-import Prelude  ( FilePath, Int, all, div, drop, filter, map, mod, null, putStrLn )
+import Prelude  ( FilePath, Int, all, div, drop, error, filter, map, mod, null, putStrLn )
 
-
-import qualified Data.Aeson           as A
 import qualified Data.ByteString      as BSS
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Text.IO         as TIO
@@ -33,23 +31,69 @@ import qualified Data.Text                    as T
 
 -- aeson -------------------------------
 
-import Data.Aeson  ( FromJSON, ToJSON,
+import qualified Data.Aeson           as Aeson
+
+import Data.Aeson  ( FromJSON, ToJSON, (.:), (.:?),
                      defaultOptions, omitNothingFields, genericToJSON, withObject )
 
 -- base --------------------------------
 
-import Data.List     ( zip )
+import Data.Char     ( isDigit )
+import Data.List     ( isPrefixOf, partition, zip )
+import Data.Maybe    ( catMaybes )
 import GHC.Generics  ( Generic )
+import Text.Read     ( read )
+
+-- bytestring --------------------------
+
+import Data.ByteString  ( ByteString )
+
+-- data-textual ------------------------
+
+import Data.Textual  ( Printable( print ), Textual( textual ), fromText,toText )
+
+-- fpath -------------------------------
+
+import FPath.Error.FPathError  ( AsFPathError, FPathIOError )
 
 -- monaderror-io -----------------------
 
 import MonadError           ( eitherME )
 import MonadError.IO.Error  ( IOError, throwUserError )
 
+-- monadio-plus ------------------------
+
+import MonadIO.FPath  ( getCwd )
+
+-- parser-plus -------------------------
+
+import ParserPlus  ( digits )
+
+-- optparse-applicative ----------------
+
+import Options.Applicative  ( Parser, metavar, readerError, strArgument )
+
+-- optparse-plus -----------------------
+
+import OptParsePlus  ( textualArgument )
+
+-- parsers -----------------------------
+
+import Text.Parser.Char  ( string )
+
+-- stdmain -----------------------------
+
+import StdMain  ( stdMainSimple )
+
 -- text --------------------------------
 
 import Data.Text.Encoding        ( decodeUtf8With )
 import Data.Text.Encoding.Error  ( lenientDecode )
+
+
+-- text-printer ------------------------
+
+import qualified  Text.Printer  as  P
 
 --------------------------------------------------------------------------------
 
@@ -75,13 +119,13 @@ data TitleResponse = TitleResponse { primaryTitle   ∷ 𝕋
 
 instance FromJSON TitleResponse where
   parseJSON = withObject "TitleResponse" $ \ v → do
-    TitleResponse ⊳ v A..:  "primaryTitle"
-                  ⊵ v A..:? "startYear"
-                  ⊵ v A..:? "runtimeSeconds"
-                  ⊵ v A..:? "plot"
-                  ⊵ v A..:? "interests"
-                  ⊵ v A..:? "stars"
-                  ⊵ v A..:? "directors"
+    TitleResponse ⊳ v .:  "primaryTitle"
+                  ⊵ v .:? "startYear"
+                  ⊵ v .:? "runtimeSeconds"
+                  ⊵ v .:? "plot"
+                  ⊵ v .:? "interests"
+                  ⊵ v .:? "stars"
+                  ⊵ v .:? "directors"
 
 ------------------------------------------------------------
 
@@ -90,7 +134,7 @@ data Interest = Interest { interestName ∷ 𝕋 } deriving Show
 --------------------
 
 instance FromJSON Interest where
-  parseJSON = withObject "Interest" $ \ v → Interest <$> v A..: "name"
+  parseJSON = withObject "Interest" $ \ v → Interest <$> v .: "name"
 
 ------------------------------------------------------------
 
@@ -98,8 +142,8 @@ data Person' = Person' { displayName ∷ 𝕋 } deriving Show
 
 --------------------
 
-instance A.FromJSON Person' where
-  parseJSON = withObject "Person" $ \ v → Person' <$> v A..: "displayName"
+instance FromJSON Person' where
+  parseJSON = withObject "Person" $ \ v → Person' <$> v .: "displayName"
 
 ------------------------------------------------------------
 
@@ -110,7 +154,7 @@ data CertificateResponse = CertificateResponse { certificates ∷ [Certificate] 
 
 instance FromJSON CertificateResponse where
   parseJSON =
-    withObject "CertificateResponse" $ \ v → CertificateResponse <$> v A..: "certificates"
+    withObject "CertificateResponse" $ \ v → CertificateResponse <$> v .: "certificates"
 
 ------------------------------------------------------------
 
@@ -118,9 +162,9 @@ data Certificate = Certificate { country ∷ Country , rating ∷ 𝕋 } derivin
 
 --------------------
 
-instance A.FromJSON Certificate where
+instance FromJSON Certificate where
   parseJSON =
-    withObject "Certificate" $ \ v → Certificate <$> v A..: "country" <*> v A..: "rating"
+    withObject "Certificate" $ \ v → Certificate <$> v .: "country" <*> v .: "rating"
 
 ------------------------------------------------------------
 
@@ -128,8 +172,8 @@ data Country = Country { code ∷ 𝕋 } deriving Show
 
 --------------------
 
-instance A.FromJSON Country where
-  parseJSON = withObject "Country" $ \ v → Country <$> v A..: "code"
+instance FromJSON Country where
+  parseJSON = withObject "Country" $ \ v → Country <$> v .: "code"
 
 ------------------------------------------------------------
 
@@ -137,15 +181,15 @@ data ImageResponse = ImageResponse { images ∷ [Image] } deriving Show
 
 --------------------
 
-instance A.FromJSON ImageResponse where
-  parseJSON = withObject "ImageResponse" $ \ v → ImageResponse <$> v A..: "images"
+instance FromJSON ImageResponse where
+  parseJSON = withObject "ImageResponse" $ \ v → ImageResponse <$> v .: "images"
 
 ------------------------------------------------------------
 
-data Image = Image { imageType ∷ 𝕋 , url ∷ 𝕋 } deriving Show
+data Image = Image { imageType ∷ 𝕋, url ∷ 𝕋 } deriving Show
 
 instance FromJSON Image where
-  parseJSON = withObject "Image" $ \ v → do Image <$> v A..: "type" <*> v A..: "url"
+  parseJSON = withObject "Image" $ \ v → do Image <$> v .: "type" <*> v .: "url"
 
 ------------------------------------------------------------
 
@@ -168,8 +212,7 @@ instance ToJSON FrontMatter where
 ------------------------------------------------------------
 
 -- | Person type for family members
-data Person = Abi | Xander | JJ | Mum
-  deriving (Show, Eq)
+data Person = Abi | Xander | JJ | Mum deriving (Show, Eq)
 
 --------------------
 
@@ -193,74 +236,75 @@ personPrefix Mum    = "hx"
 
 -- | Parse a string to a Person
 parsePerson ∷ 𝕋 → 𝕄 Person
-parsePerson "Abi" = Just Abi
-parsePerson "Xander" = Just Xander
-parsePerson "JJ" = Just JJ
-parsePerson "Mum" = Just Mum
-parsePerson _ = Nothing
+parsePerson "Abi"    = 𝓙 Abi
+parsePerson "Xander" = 𝓙 Xander
+parsePerson "JJ"     = 𝓙 JJ
+parsePerson "Mum"    = 𝓙 Mum
+parsePerson _        = 𝓝
+
+------------------------------------------------------------
+
+data IMDB_ID = IMDB_ID ℕ  deriving  Show
+
+instance Printable IMDB_ID where
+  print (IMDB_ID i) = P.string $ "tt" ◇ show i
+
+instance Textual IMDB_ID where
+  textual = IMDB_ID ⊳ (read ⊳ (string "tt" ⋫ digits))
 
 ------------------------------------------------------------
 
 -- | Command line options
-data Options = Options { tts    :: [𝕋]
+data Options = Options { tts    :: [IMDB_ID]
                        , people :: [Person]
                        , seen   :: [Person]
                        }
   deriving Show
 
+----------------------------------------
+
+parseOptions ∷ Parser Options
+parseOptions =
+  Options ⊳ some (textualArgument (metavar "IMDB ID")) ⊵ pure [] ⊵ pure []
+
 ------------------------------------------------------------
 
--- | Fetch JSON from a URL
--- fetchJson ∷ A.FromJSON a => 𝕋 → IO (𝕄 a)
-fetchJson ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, A.FromJSON a) => 𝕋 → μ (𝕄 a)
-fetchJson url = do
-  request ← eitherME (userE ∘ show) $ HTTP.parseRequest $ T.unpack url
-  response ← HTTP.httpBS request
+parseRequest ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => 𝕋 → μ HTTP.Request
+parseRequest url = eitherME (userE ∘ show) $ HTTP.parseRequest $ T.unpack url
+
+----------------------------------------
+
+fetchResponse ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => 𝕋 → μ ByteString
+fetchResponse url = do
+  response ← parseRequest url ≫ HTTP.httpBS
   let status = HTTP.getResponseStatusCode response
   if status == 200
-  then do
-    let body = HTTP.getResponseBody response
-    case A.eitherDecode $ BSS.fromStrict body of
-      Left err →
-        throwUserError $ "Error decoding JSON: " ◇ err
-      Right result → return $ Just result
-  else do
-    throwUserError $ "HTTP error: " ◇ show status
+  then return $ HTTP.getResponseBody response
+  else throwUserError $ "HTTP error: " ◇ show status
+
+----------------------------------------
+
+fetchJson ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, FromJSON a) => 𝕋 → μ (𝕄 a)
+fetchJson url = do
+  (Aeson.eitherDecode ∘ BSS.fromStrict) ⊳ fetchResponse url ≫ \ case
+    𝓛 err    → throwUserError $ "Error decoding JSON: " ◇ err
+    𝓡 result → return $ 𝓙 result
 
 ----------------------------------------
 
 -- | Sanitize title for filename
 sanitizeTitle ∷ 𝕋 → 𝕋
-sanitizeTitle title =
-  let replacedColons = T.replace ":" "-" title
-      replacedSlashes = T.replace "/" "-" replacedColons
-  in replacedSlashes
+sanitizeTitle title = T.replace "/" "-" $ T.replace ":" "-" title
 
 ----------------------------------------
 
 -- | Format duration from seconds
 formatDuration ∷ 𝕄 Int → 𝕋
-formatDuration (Just seconds) =
+formatDuration (𝓙 seconds) =
   let hours = seconds `div` 3600
       minutes = (seconds `mod` 3600) `div` 60
   in T.pack $ show hours ◇ "h" ◇ show minutes ◇ "m"
-formatDuration Nothing = "N/A"
-
-----------------------------------------
-
--- | Write a property to a file
-writeProperty ∷ FilePath → 𝕋 → 𝕋 → IO ()
-writeProperty filePath key value = do
-  TIO.appendFile filePath $ T.concat [key, ": ", value, "\n"]
-
-----------------------------------------
-
--- | Write a list of properties to a file
-writeProperties ∷ FilePath → 𝕋 → [𝕋] → IO ()
-writeProperties filePath key values = do
-  TIO.appendFile filePath $ T.concat [key, ":\n"]
-  Monad.forM_ values $ \ value → do
-    TIO.appendFile filePath $ T.concat ["  - ", value, "\n"]
+formatDuration 𝓝 = "N/A"
 
 ----------------------------------------
 
@@ -312,8 +356,8 @@ processTitle tt opts = do
   let titleUrl = T.concat [imdbApiBase, tt]
   maybeTitleResponse ← fetchJson titleUrl
   case maybeTitleResponse of
-    Nothing → liftIO $ putStrLn $ "Failed to fetch title: " ◇ T.unpack tt
-    Just titleResponse → do
+    𝓝 → liftIO $ putStrLn $ "Failed to fetch title: " ◇ T.unpack tt
+    𝓙 titleResponse → do
       let sanitizedTitle = sanitizeTitle (primaryTitle titleResponse)
           targetPath = FP.combine "movies" $ T.unpack sanitizedTitle ◇ ".md"
           attachmentDir = FP.combine "movies" "_attachments"
@@ -333,7 +377,7 @@ processTitle tt opts = do
           let imagesUrl = T.concat [imdbApiBase, tt, "/images"]
           maybeImageResponse ← fetchJson imagesUrl
           case maybeImageResponse of
-            Just imageResponse → do
+            𝓙 imageResponse → do
               let posterImages = filter (\ image → (imageType image) == "poster") (images imageResponse)
               if null posterImages
                 then liftIO $ putStrLn "No images found"
@@ -348,9 +392,9 @@ processTitle tt opts = do
           let certificateUrl = T.concat [imdbApiBase, tt, "/certificates"]
           maybeCertificateResponse ← fetchJson certificateUrl
           let ukCertificate = case maybeCertificateResponse of
-                Just certificateResponse →
+                𝓙 certificateResponse →
                   Maybe.listToMaybe $ map rating $ filter (\ certificate → code (country certificate) == "GB") (certificates certificateResponse)
-                Nothing → Nothing
+                𝓝 → 𝓝
 
           writeMarkdownFile tt sanitizedTitle ukCertificate titleResponse targetPath
 
@@ -379,15 +423,57 @@ parseArgs args =
       rawSeen = map (T.pack . drop 1) seen
       parsedPeople = map parsePerson rawPeople
       parsedSeen = map parsePerson rawSeen
-      unknownPeople = [name | (name, Nothing) ← zip rawPeople parsedPeople]
-      unknownSeen = [name | (name, Nothing) ← zip rawSeen parsedSeen]
+      unknownPeople = [name | (name, 𝓝) ← zip rawPeople parsedPeople]
+      unknownSeen = [name | (name, 𝓝) ← zip rawSeen parsedSeen]
       allUnknown = unknownPeople ◇ unknownSeen
   in if null allUnknown
-     then Right $ Options { tts = map T.pack tts
-                           , people = Maybe.catMaybes parsedPeople
-                           , seen = Maybe.catMaybes parsedSeen
-                           }
+     then Right $ Options { tts = catMaybes $ map (fromText ∘ T.pack) tts
+                          , people = Maybe.catMaybes parsedPeople
+                          , seen = Maybe.catMaybes parsedSeen
+                          }
      else Left allUnknown
+
+----------------------------------------
+
+{-
+-- | Parses command-line arguments.
+--   - TT IDs: @tt1234567@ (must start with "tt" followed by digits)
+--   - People to add: @-John@ (prefix with '-')
+--   - People seen: @+Jane@ (prefix with '+')
+--   Fails with a list of any unrecognized person names.
+parseOptions :: Parser Options
+parseOptions = do
+  args <- many (strArgument (metavar "ARG"))
+  let (tts, rest) = partition (\arg -> "tt" `isPrefixOf` arg && all isDigit (drop 2 arg)) args
+      (people, seen) = partition (\arg -> "-" `isPrefixOf` arg) rest
+      rawPeople = map (T.pack . drop 1) people
+      rawSeen = map (T.pack . drop 1) seen
+      parsedPeople = map parsePerson rawPeople
+      parsedSeen = map parsePerson rawSeen
+      unknownPeople = [name | (name, Nothing) <- zip rawPeople parsedPeople]
+      unknownSeen = [name | (name, Nothing) <- zip rawSeen parsedSeen]
+      allUnknown = unknownPeople ◇ unknownSeen
+  if null allUnknown
+    then pure $ Options (map T.pack tts) (catMaybes parsedPeople) (catMaybes parsedSeen)
+--    else readerError (show allUnknown)
+    else error $ "Unknown person(s): " ◇ T.unpack (T.intercalate ", " allUnknown)
+-}
+
+----------------------------------------
+
+doMain ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, AsFPathError ε, MonadError ε μ) => Options → μ ()
+doMain opts = do
+  cwd ← getCwd
+  if null (tts opts)
+  then throwUserError @_ @𝕋 "no titles provided"
+  else do
+    -- Check if movies directory exists
+    moviesDirExists ← liftIO $ Dir.doesDirectoryExist "movies"
+    if not moviesDirExists
+      then throwUserError @_ @𝕋 "run this in an obsidian movies-info dir"
+      else Monad.forM_ (tts opts) $ \ tt → ѥ (processTitle @IOError (toText tt) opts) ≫ \ case
+                                      𝓛 e → liftIO $ Exit.exitFailure -- XXX REASON/error
+                                      𝓡 r → return r
 
 ----------------------------------------
 
@@ -399,20 +485,20 @@ main = do
     then putStrLn "usage: imdb <tt...>"
     else do
       case parseArgs args of
-        Left unknown → do
-          putStrLn "Error: Unknown person names:"
-          mapM_ (\name → TIO.putStrLn (T.concat ["  ", name])) unknown
-          Exit.exitFailure
-        Right opts → do
-          if null (tts opts)
-          then putStrLn "no titles provided"
-          else do
-            -- Check if movies directory exists
-            moviesDirExists ← Dir.doesDirectoryExist "movies"
-            if not moviesDirExists
-              then putStrLn "run this in an obsidian movies-info dir"
-              else Monad.forM_ (tts opts) $ \ tt → ѥ (processTitle @IOError tt opts) ≫ \ case
-                                              𝓛 e → Exit.exitFailure -- XXX REASON/error
-                                              𝓡 r → return r
+         𝓛 unknown → do putStrLn "Error: Unknown person names:"
+                        mapM_ (\name → TIO.putStrLn (T.concat ["  ", name])) unknown
+                        Exit.exitFailure
+         𝓡 opts → ѥ (doMain @FPathIOError opts) ≫ \ case
+                     𝓡 () → return ()
+                     𝓛 e  → liftIO $ putStrLn (show e) ⪼ Exit.exitFailure
+
+
+doMain' doMock opts = doMain opts
+
+{-
+main' ∷ IO ()
+main' = let progDesc ∷ 𝕋 = "add a new film to the obsidian movies library"
+        in  stdMainSimple progDesc _ doMain'
+-}
 
 -- that's all, folks! ----------------------------------------------------------
