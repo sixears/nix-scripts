@@ -39,7 +39,7 @@ import Data.Aeson  ( FromJSON, ToJSON, (.:), (.:?),
 -- base --------------------------------
 
 import Data.Char     ( isDigit )
-import Data.List     ( isPrefixOf, partition, zip )
+import Data.List     ( isPrefixOf, nub, partition, zip )
 import Data.Maybe    ( catMaybes )
 import GHC.Generics  ( Generic )
 import Text.Read     ( read )
@@ -71,15 +71,16 @@ import ParserPlus  ( digits )
 
 -- optparse-applicative ----------------
 
-import Options.Applicative  ( Parser, metavar, readerError, strArgument )
+import Options.Applicative  ( Parser, help, long, metavar, readerError, short, strArgument )
 
 -- optparse-plus -----------------------
 
-import OptParsePlus  ( textualArgument )
+import OptParsePlus  ( textualArgument, textualOption )
 
 -- parsers -----------------------------
 
-import Text.Parser.Char  ( string )
+import Text.Parser.Char         ( string )
+import Text.Parser.Combinators  ( choice )
 
 -- stdmain -----------------------------
 
@@ -89,7 +90,6 @@ import StdMain  ( stdMainSimple )
 
 import Data.Text.Encoding        ( decodeUtf8With )
 import Data.Text.Encoding.Error  ( lenientDecode )
-
 
 -- text-printer ------------------------
 
@@ -212,7 +212,39 @@ instance ToJSON FrontMatter where
 ------------------------------------------------------------
 
 -- | Person type for family members
-data Person = Abi | Xander | JJ | Mum deriving (Show, Eq)
+data Person = Abi | Xander | JJ | Mum  deriving  (Show, Eq)
+
+--------------------
+
+instance Printable Person where print = P.string ∘ show
+
+--------------------
+
+instance Textual Person where
+  textual = choice [ string "Mum"       ⋫ pure Mum
+                   , string "mum"       ⋫ pure Mum
+                   , string "Heather"   ⋫ pure Mum
+                   , string "heather"   ⋫ pure Mum
+                   , string "Hx"        ⋫ pure Mum
+                   , string "hx"        ⋫ pure Mum
+                   , string "Abigail"   ⋫ pure Abi
+                   , string "abigail"   ⋫ pure Abi
+                   , string "Abi"       ⋫ pure Abi
+                   , string "abi"       ⋫ pure Abi
+                   , string "Ax"        ⋫ pure Abi
+                   , string "ax"        ⋫ pure Abi
+                   , string "Alexander" ⋫ pure Xander
+                   , string "alexander" ⋫ pure Xander
+                   , string "Xander"    ⋫ pure Xander
+                   , string "xander"    ⋫ pure Xander
+                   , string "Xax"       ⋫ pure Xander
+                   , string "xax"       ⋫ pure Xander
+                   , string "Jonathan"  ⋫ pure JJ
+                   , string "jonathan"  ⋫ pure JJ
+                   , string "JJ"        ⋫ pure JJ
+                   , string "jj"        ⋫ pure JJ
+                   ]
+
 
 --------------------
 
@@ -246,8 +278,12 @@ parsePerson _        = 𝓝
 
 data IMDB_ID = IMDB_ID ℕ  deriving  Show
 
+--------------------
+
 instance Printable IMDB_ID where
   print (IMDB_ID i) = P.string $ "tt" ◇ show i
+
+--------------------
 
 instance Textual IMDB_ID where
   textual = IMDB_ID ⊳ (read ⊳ (string "tt" ⋫ digits))
@@ -265,7 +301,11 @@ data Options = Options { tts    :: [IMDB_ID]
 
 parseOptions ∷ Parser Options
 parseOptions =
-  Options ⊳ some (textualArgument (metavar "IMDB ID")) ⊵ pure [] ⊵ pure []
+  Options ⊳ some (textualArgument (metavar "IMDB ID"))
+          ⊵ nub ⊳ (many (textualOption (ю [ short 'w', long "wants", long "want"
+                                          , help "wants to see" ])))
+          ⊵ nub ⊳ (many (textualOption (ю [ short 'h', long "has-seen", long "seen"
+                                          , help "has seen" ])))
 
 ------------------------------------------------------------
 
@@ -407,9 +447,10 @@ processTitle tt opts = do
             liftIO $ TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
 
           Monad.forM_ (seen opts) $ \ p → do
-            let personDir = FP.combine "people" (T.unpack (personName p))
+            let pp = T.unpack (personPrefix p)
+                personDir = FP.combine "people" (T.unpack (personName p))
             liftIO $ Dir.createDirectoryIfMissing 𝓣 personDir
-            let personFilePath = FP.combine personDir "has-seen.md"
+            let personFilePath = FP.combine personDir $ pp ◇ "-has-seen.md"
             liftIO $ TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
 
 ----------------------------------------
@@ -478,8 +519,8 @@ doMain opts = do
 ----------------------------------------
 
 -- | Main function
-main ∷ IO ()
-main = do
+main' ∷ IO ()
+main' = do
   args ← Env.getArgs
   if null args
     then putStrLn "usage: imdb <tt...>"
@@ -495,10 +536,8 @@ main = do
 
 doMain' doMock opts = doMain opts
 
-{-
-main' ∷ IO ()
-main' = let progDesc ∷ 𝕋 = "add a new film to the obsidian movies library"
-        in  stdMainSimple progDesc _ doMain'
--}
+main ∷ IO ()
+main = let progDesc ∷ 𝕋 = "add a new film to the obsidian movies library"
+        in  stdMainSimple progDesc parseOptions doMain'
 
 -- that's all, folks! ----------------------------------------------------------
