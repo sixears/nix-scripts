@@ -354,11 +354,8 @@ fetchJson url = do
 ----------------------------------------
 
 -- | Sanitize title for filename
-titleFilename ∷ 𝕋 → 𝕋
-titleFilename title = T.replace "/" "-" $ T.replace ":" "-" title
-
-titleFilename' ∷ 𝕋 → PathComponent
-titleFilename' title = __parse__ $
+title_filename ∷ 𝕋 → PathComponent
+title_filename title = __parse__ $
   case breakOn " " $ T.replace "/" "-" $ T.replace ":" "-" title of
     ("The", rest) → dropWhile (≡' ') rest ◇ "," ◇ "The"
     ("A",   rest) → dropWhile (≡' ') rest ◇ "," ◇ "A"
@@ -439,7 +436,7 @@ processTitle info_dir tt opts = do
   case maybeTitleResponse of
     𝓝 → liftIO $ putStrLn $ "Failed to fetch title: " ◇ T.unpack tt
     𝓙 titleResponse → do
-      let sanitized_title   = titleFilename' (primaryTitle titleResponse)
+      let sanitized_title   = title_filename $ primaryTitle titleResponse
           movies_dir        = info_dir ⫻ [reldir|movies/|]
           md_fname          = fromPC (sanitized_title ⊙ [pc|md|])
           jpg_fname         = fromPC (sanitized_title ⊙ [pc|jpg|])
