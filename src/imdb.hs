@@ -1,17 +1,22 @@
 -- IMDB to Obsidian Haskell Script
 -- Uses ImageMagick (`magick`) for image resizing via command line
 
+-- XXX swap 'The', 'A', 'An' to the end
+-- XXX parse tt from, e.g., https://www.imdb.com/title/tt20234774/parentalguide/?ref_=tt_ov_pg#certificates
+
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes       #-}
+{-# LANGUAGE UnicodeSyntax     #-}
 
 module Main where
 
 import Base1
 
 -- putStrLn => log, or error?
-import Prelude  ( FilePath, Int, all, div, drop, error, filter, map, mod, null, putStrLn )
+import Prelude  ( FilePath, Int, div, filter, map, mod, null, putStrLn )
 
 import qualified Data.ByteString      as BSS
 import qualified Data.ByteString.Lazy as BSL
@@ -19,10 +24,7 @@ import qualified Data.Text.IO         as TIO
 import qualified Network.HTTP.Simple  as HTTP
 import qualified System.Directory     as Dir
 import qualified System.FilePath      as FP
-import qualified System.Environment   as Env
 import qualified System.Process       as Proc
-import qualified Data.Char            as Char
-import qualified Data.List            as List
 import qualified Data.Maybe           as Maybe
 import qualified Control.Monad        as Monad
 import qualified System.Exit          as Exit
@@ -38,9 +40,7 @@ import Data.Aeson  ( FromJSON, ToJSON, (.:), (.:?),
 
 -- base --------------------------------
 
-import Data.Char     ( isDigit )
-import Data.List     ( isPrefixOf, nub, partition, zip )
-import Data.Maybe    ( catMaybes )
+import Data.List     ( nub )
 import GHC.Generics  ( Generic )
 import Text.Read     ( read )
 
@@ -50,11 +50,23 @@ import Data.ByteString  ( ByteString )
 
 -- data-textual ------------------------
 
-import Data.Textual  ( Printable( print ), Textual( textual ), fromText,toText )
+import Data.Textual  ( Textual( textual ) )
 
 -- fpath -------------------------------
 
-import FPath.Error.FPathError  ( AsFPathError, FPathIOError )
+import FPath.AbsDir            ( AbsDir )
+import FPath.AbsFile           ( AbsFile )
+import FPath.AppendableFPath   ( (⫻) )
+import FPath.Error.FPathError  ( AsFPathError )
+import FPath.FileLike          ( (⊙) )
+import FPath.Parseable         ( __parse__ )
+import FPath.PathComponent     ( PathComponent, pc )
+import FPath.RelDir            ( reldir )
+import FPath.RelFile           ( RelFile )
+
+-- mockio-plus -------------------------
+
+import MockIO.DoMock  ( DoMock )
 
 -- monaderror-io -----------------------
 
@@ -65,13 +77,21 @@ import MonadError.IO.Error  ( IOError, throwUserError )
 
 import MonadIO.FPath  ( getCwd )
 
+-- mono-traversable --------------------
+
+import Data.MonoTraversable  ( Element )
+
+-- non-empty-containers ----------------
+
+import NonEmptyContainers.SeqNEConversions  ( FromSeqNonEmpty, fromSeqNE )
+
 -- parser-plus -------------------------
 
 import ParserPlus  ( digits )
 
 -- optparse-applicative ----------------
 
-import Options.Applicative  ( Parser, help, long, metavar, readerError, short, strArgument )
+import Options.Applicative  ( Parser, help, long, metavar, short )
 
 -- optparse-plus -----------------------
 
@@ -88,6 +108,7 @@ import StdMain  ( stdMainSimple )
 
 -- text --------------------------------
 
+import Data.Text                 ( breakOn, dropWhile )
 import Data.Text.Encoding        ( decodeUtf8With )
 import Data.Text.Encoding.Error  ( lenientDecode )
 
@@ -281,7 +302,7 @@ data IMDB_ID = IMDB_ID ℕ  deriving  Show
 --------------------
 
 instance Printable IMDB_ID where
-  print (IMDB_ID i) = P.string $ "tt" ◇ show i
+  print (IMDB_ID i) = P.text $ [fmt|tt%07d|] i
 
 --------------------
 
@@ -333,8 +354,16 @@ fetchJson url = do
 ----------------------------------------
 
 -- | Sanitize title for filename
-sanitizeTitle ∷ 𝕋 → 𝕋
-sanitizeTitle title = T.replace "/" "-" $ T.replace ":" "-" title
+titleFilename ∷ 𝕋 → 𝕋
+titleFilename title = T.replace "/" "-" $ T.replace ":" "-" title
+
+titleFilename' ∷ 𝕋 → PathComponent
+titleFilename' title = __parse__ $
+  case breakOn " " $ T.replace "/" "-" $ T.replace ":" "-" title of
+    ("The", rest) → dropWhile (≡' ') rest ◇ "," ◇ "The"
+    ("A",   rest) → dropWhile (≡' ') rest ◇ "," ◇ "A"
+    ("An",  rest) → dropWhile (≡' ') rest ◇ "," ◇ "An"
+    (ini,   rest) → ini ◇ rest
 
 ----------------------------------------
 
@@ -349,20 +378,26 @@ formatDuration 𝓝 = "N/A"
 ----------------------------------------
 
 -- | Download and resize an image using ImageMagick's `magick` command
-downloadAndResizeImage ∷ 𝕋 → FilePath → IO ()
-downloadAndResizeImage imageUrl targetPath = do
+-- downloadAndResizeImage ∷ 𝕋 → FilePath → IO ()
+downloadAndResizeImage ∷ 𝕋 → AbsFile → IO ()
+downloadAndResizeImage imageUrl target_path = do
   -- Download the image to a temporary file
   request ← HTTP.parseRequest $ T.unpack imageUrl
   response ← HTTP.httpBS request
   let body = HTTP.getResponseBody response
-  let tempFilePath = targetPath ◇ ".tmp"
-  BSL.writeFile tempFilePath $ BSS.fromStrict body
+  -- XXX better construction
+  -- let tempFilePath = toString target_path ◇ ".tmp"
+  let temp_file_path = target_path ⊙ [pc|tmp|]
+  -- XXX use something other than BSL? (e.g., MockIO)
+  BSL.writeFile (toString temp_file_path) $ BSS.fromStrict body
+  -- BSL.writeFile tempFilePath $ BSS.fromStrict body
 
   -- Use ImageMagick to resize the image
-  Proc.callProcess "magick" [tempFilePath, "-resize", "600x400>", targetPath]
+  Proc.callProcess "magick" [toString temp_file_path, "-resize", "600x400>", toString target_path]
 
   -- Remove the temporary file
-  Dir.removeFile tempFilePath
+  -- XXX use something other than Dir? (e.g., MockIO)
+  Dir.removeFile (toString temp_file_path)
 
 ----------------------------------------
 
@@ -389,29 +424,48 @@ writeMarkdownFile tt sanitizedTitle ukCert titleResponse targetPath = do
 
 ----------------------------------------
 
+fromPC ∷ (Element α ~ PathComponent, FromSeqNonEmpty α) => PathComponent → α
+fromPC = fromSeqNE ∘ pure
+
+
 -- | Process a single title
 -- processTitle ∷ 𝕋 → Options → IO ()
-processTitle ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => 𝕋 → Options → μ ()
-processTitle tt opts = do
+processTitle ∷ ∀ ε μ . (MonadIO μ,AsIOError ε,MonadError ε μ) => AbsDir → 𝕋 → Options → μ ()
+processTitle info_dir tt opts = do
   let titleUrl = T.concat [imdbApiBase, tt]
+  liftIO $ putStrLn $ "trying url: " ◇ T.unpack titleUrl
+  -- XXX this should fail with, e.g., https://api.imdbapi.dev/titles/tt107206
   maybeTitleResponse ← fetchJson titleUrl
   case maybeTitleResponse of
     𝓝 → liftIO $ putStrLn $ "Failed to fetch title: " ◇ T.unpack tt
     𝓙 titleResponse → do
-      let sanitizedTitle = sanitizeTitle (primaryTitle titleResponse)
-          targetPath = FP.combine "movies" $ T.unpack sanitizedTitle ◇ ".md"
-          attachmentDir = FP.combine "movies" "_attachments"
-          imageTargetPath = FP.combine attachmentDir $ T.unpack sanitizedTitle ◇ ".jpg"
-
+      let -- sanitizedTitle = titleFilename (primaryTitle titleResponse)
+          sanitized_title = titleFilename' (primaryTitle titleResponse)
+          movies_dir = info_dir ⫻ [reldir|movies/|]
+          md_fname = fromPC (sanitized_title ⊙ [pc|md|])
+          jpg_fname = fromPC (sanitized_title ⊙ [pc|jpg|])
+          -- targetPath = FP.combine "movies" $ T.unpack sanitizedTitle ◇ ".md"
+          -- XXX lose typesig?
+          target_path ∷ AbsFile = movies_dir ⫻ md_fname
+          -- attachmentDir = FP.combine "movies" "_attachments"
+          -- XXX lose typesig?
+          attachment_dir ∷ AbsDir = movies_dir ⫻ [reldir|_attachments/|]
+          -- XXX lose typesig?
+          -- attachmentDir' ∷ AbsDir = info_dir ⫻ [reldir|movies/|] ⫻ [reldir|_attachments/|]
+          -- imageTargetPath = FP.combine attachmentDir $ T.unpack sanitizedTitle ◇ ".jpg"
+          image_target_path ∷ AbsFile = attachment_dir ⫻ jpg_fname
       -- Check if the file already exists
-      exists ← liftIO $ Dir.doesFileExist targetPath
+      liftIO $ putStrLn $ "Fetched title: " ◇ T.unpack tt
+          -- XXX use something better than Dir, e.g., MockIO
+      exists ← liftIO $ Dir.doesFileExist (toString target_path)
       if exists
-        then liftIO $ putStrLn $ "Already exists: " ◇ targetPath ◇ " (" ◇ T.unpack tt ◇ ")"
+        then liftIO $ putStrLn $ "Already exists: " ◇ toString target_path ◇ " (" ◇ T.unpack tt ◇ ")"
         else do
           liftIO $ putStrLn $ "Found title: " ◇ T.unpack (primaryTitle titleResponse)
 
           -- Create attachments directory if it doesn't exist
-          liftIO $ Dir.createDirectoryIfMissing 𝓣 attachmentDir
+          -- XXX use something better than Dir, e.g., MockIO
+          liftIO $ Dir.createDirectoryIfMissing 𝓣 (toString attachment_dir)
 
           -- Fetch and process images
           let imagesUrl = T.concat [imdbApiBase, tt, "/images"]
@@ -422,10 +476,10 @@ processTitle tt opts = do
               if null posterImages
                 then liftIO $ putStrLn "No images found"
                 else do
-                  liftIO $ putStrLn $ "Writing " ◇ imageTargetPath ◇ "..."
+                  liftIO $ putStrLn $ "Writing " ◇ (toString image_target_path) ◇ "..."
                   case head posterImages of
                     𝓝    → liftIO $ putStrLn "no image found"
-                    𝓙 pI → liftIO $ downloadAndResizeImage (url pI) imageTargetPath
+                    𝓙 pI → liftIO $ downloadAndResizeImage (url pI) image_target_path -- imageTargetPath
             _ → liftIO $ putStrLn "Failed to fetch images"
 
           -- Fetch certificate
@@ -436,7 +490,8 @@ processTitle tt opts = do
                   Maybe.listToMaybe $ map rating $ filter (\ certificate → code (country certificate) == "GB") (certificates certificateResponse)
                 𝓝 → 𝓝
 
-          writeMarkdownFile tt sanitizedTitle ukCertificate titleResponse targetPath
+          -- XXX writeMarkdownFile to not take a string for a filename
+          writeMarkdownFile tt (toText sanitized_title) ukCertificate titleResponse (toString target_path)
 
           -- Update people files
           Monad.forM_ (people opts) $ \ p → do
@@ -453,57 +508,13 @@ processTitle tt opts = do
             let personFilePath = FP.combine personDir $ pp ◇ "-has-seen.md"
             liftIO $ TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
 
-----------------------------------------
-
--- | Parse command line arguments
-parseArgs ∷ [String] → 𝔼 [𝕋] Options
-parseArgs args =
-  let (tts, peopleArgs) = List.partition (\ arg → "tt" `List.isPrefixOf` arg && all Char.isDigit (drop 2 arg)) args
-      (people, seen) = List.partition (\ arg → "+" `List.isPrefixOf` arg) peopleArgs
-      rawPeople = map (T.pack . drop 1) people
-      rawSeen = map (T.pack . drop 1) seen
-      parsedPeople = map parsePerson rawPeople
-      parsedSeen = map parsePerson rawSeen
-      unknownPeople = [name | (name, 𝓝) ← zip rawPeople parsedPeople]
-      unknownSeen = [name | (name, 𝓝) ← zip rawSeen parsedSeen]
-      allUnknown = unknownPeople ◇ unknownSeen
-  in if null allUnknown
-     then Right $ Options { tts = catMaybes $ map (fromText ∘ T.pack) tts
-                          , people = Maybe.catMaybes parsedPeople
-                          , seen = Maybe.catMaybes parsedSeen
-                          }
-     else Left allUnknown
 
 ----------------------------------------
 
-{-
--- | Parses command-line arguments.
---   - TT IDs: @tt1234567@ (must start with "tt" followed by digits)
---   - People to add: @-John@ (prefix with '-')
---   - People seen: @+Jane@ (prefix with '+')
---   Fails with a list of any unrecognized person names.
-parseOptions :: Parser Options
-parseOptions = do
-  args <- many (strArgument (metavar "ARG"))
-  let (tts, rest) = partition (\arg -> "tt" `isPrefixOf` arg && all isDigit (drop 2 arg)) args
-      (people, seen) = partition (\arg -> "-" `isPrefixOf` arg) rest
-      rawPeople = map (T.pack . drop 1) people
-      rawSeen = map (T.pack . drop 1) seen
-      parsedPeople = map parsePerson rawPeople
-      parsedSeen = map parsePerson rawSeen
-      unknownPeople = [name | (name, Nothing) <- zip rawPeople parsedPeople]
-      unknownSeen = [name | (name, Nothing) <- zip rawSeen parsedSeen]
-      allUnknown = unknownPeople ◇ unknownSeen
-  if null allUnknown
-    then pure $ Options (map T.pack tts) (catMaybes parsedPeople) (catMaybes parsedSeen)
---    else readerError (show allUnknown)
-    else error $ "Unknown person(s): " ◇ T.unpack (T.intercalate ", " allUnknown)
--}
-
-----------------------------------------
-
-doMain ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, AsFPathError ε, MonadError ε μ) => Options → μ ()
-doMain opts = do
+doMain ∷ ∀ ε μ .
+         (MonadIO μ, AsIOError ε, AsFPathError ε, MonadError ε μ) => DoMock → Options → μ ()
+-- XXX DoMock; percolate it through
+doMain doMock opts = do
   cwd ← getCwd
   if null (tts opts)
   then throwUserError @_ @𝕋 "no titles provided"
@@ -512,32 +523,14 @@ doMain opts = do
     moviesDirExists ← liftIO $ Dir.doesDirectoryExist "movies"
     if not moviesDirExists
       then throwUserError @_ @𝕋 "run this in an obsidian movies-info dir"
-      else Monad.forM_ (tts opts) $ \ tt → ѥ (processTitle @IOError (toText tt) opts) ≫ \ case
+      else Monad.forM_ (tts opts) $ \ tt → ѥ (processTitle @IOError cwd (toText tt) opts) ≫ \ case
                                       𝓛 e → liftIO $ Exit.exitFailure -- XXX REASON/error
                                       𝓡 r → return r
 
 ----------------------------------------
 
--- | Main function
-main' ∷ IO ()
-main' = do
-  args ← Env.getArgs
-  if null args
-    then putStrLn "usage: imdb <tt...>"
-    else do
-      case parseArgs args of
-         𝓛 unknown → do putStrLn "Error: Unknown person names:"
-                        mapM_ (\name → TIO.putStrLn (T.concat ["  ", name])) unknown
-                        Exit.exitFailure
-         𝓡 opts → ѥ (doMain @FPathIOError opts) ≫ \ case
-                     𝓡 () → return ()
-                     𝓛 e  → liftIO $ putStrLn (show e) ⪼ Exit.exitFailure
-
-
-doMain' doMock opts = doMain opts
-
 main ∷ IO ()
 main = let progDesc ∷ 𝕋 = "add a new film to the obsidian movies library"
-        in  stdMainSimple progDesc parseOptions doMain'
+       in  stdMainSimple progDesc parseOptions doMain
 
 -- that's all, folks! ----------------------------------------------------------
