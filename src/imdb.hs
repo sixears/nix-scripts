@@ -439,21 +439,15 @@ processTitle info_dir tt opts = do
   case maybeTitleResponse of
     𝓝 → liftIO $ putStrLn $ "Failed to fetch title: " ◇ T.unpack tt
     𝓙 titleResponse → do
-      let -- sanitizedTitle = titleFilename (primaryTitle titleResponse)
-          sanitized_title = titleFilename' (primaryTitle titleResponse)
-          movies_dir = info_dir ⫻ [reldir|movies/|]
-          md_fname = fromPC (sanitized_title ⊙ [pc|md|])
-          jpg_fname = fromPC (sanitized_title ⊙ [pc|jpg|])
-          -- targetPath = FP.combine "movies" $ T.unpack sanitizedTitle ◇ ".md"
+      let sanitized_title   = titleFilename' (primaryTitle titleResponse)
+          movies_dir        = info_dir ⫻ [reldir|movies/|]
+          md_fname          = fromPC (sanitized_title ⊙ [pc|md|])
+          jpg_fname         = fromPC (sanitized_title ⊙ [pc|jpg|])
           -- XXX lose typesig?
-          target_path ∷ AbsFile = movies_dir ⫻ md_fname
-          -- attachmentDir = FP.combine "movies" "_attachments"
-          -- XXX lose typesig?
-          attachment_dir ∷ AbsDir = movies_dir ⫻ [reldir|_attachments/|]
-          -- XXX lose typesig?
-          -- attachmentDir' ∷ AbsDir = info_dir ⫻ [reldir|movies/|] ⫻ [reldir|_attachments/|]
-          -- imageTargetPath = FP.combine attachmentDir $ T.unpack sanitizedTitle ◇ ".jpg"
-          image_target_path ∷ AbsFile = attachment_dir ⫻ jpg_fname
+          target_path       ∷ AbsFile
+          target_path       = movies_dir ⫻ md_fname
+          attachment_dir    = movies_dir ⫻ [reldir|_attachments/|]
+          image_target_path = attachment_dir ⫻ jpg_fname
       -- Check if the file already exists
       liftIO $ putStrLn $ "Fetched title: " ◇ T.unpack tt
           -- XXX use something better than Dir, e.g., MockIO
