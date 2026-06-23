@@ -1,9 +1,6 @@
 -- IMDB to Obsidian Haskell Script
 -- Uses ImageMagick (`magick`) for image resizing via command line
 
--- XXX swap 'The', 'A', 'An' to the end
--- XXX parse tt from, e.g., https://www.imdb.com/title/tt20234774/parentalguide/?ref_=tt_ov_pg#certificates
-
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE NoImplicitPrelude #-}
@@ -28,19 +25,19 @@ import qualified System.Process       as Proc
 import qualified Data.Maybe           as Maybe
 import qualified Control.Monad        as Monad
 import qualified System.Exit          as Exit
-import qualified Data.Yaml                    as Yaml
-import qualified Data.Text                    as T
+import qualified Data.Yaml            as Yaml
+import qualified Data.Text            as T
 
 -- aeson -------------------------------
 
 import qualified Data.Aeson           as Aeson
 
-import Data.Aeson  ( FromJSON, ToJSON, (.:), (.:?),
-                     defaultOptions, omitNothingFields, genericToJSON, withObject )
+import Data.Aeson  ( FromJSON, ToJSON, (.:), (.:?), defaultOptions, fieldLabelModifier,
+                     omitNothingFields, genericToJSON, withObject )
 
 -- base --------------------------------
 
-import Data.List     ( nub )
+import Data.List     ( dropWhileEnd, nub )
 import GHC.Generics  ( Generic )
 import Text.Read     ( read )
 
@@ -55,7 +52,7 @@ import Data.Textual  ( Textual( textual ) )
 -- fpath -------------------------------
 
 import FPath.AbsDir            ( AbsDir )
-import FPath.AbsFile           ( AbsFile )
+import FPath.AbsFile           ( AbsFile, absfile )
 import FPath.AppendableFPath   ( (⫻) )
 import FPath.Error.FPathError  ( AsFPathError )
 import FPath.FileLike          ( (⊙) )
@@ -64,9 +61,31 @@ import FPath.PathComponent     ( PathComponent, pc )
 import FPath.RelDir            ( reldir )
 import FPath.RelFile           ( RelFile )
 
+-- lens --------------------------------
+
+import Control.Lens.Getter  ( view )
+
+-- log-plus ----------------------------
+
+import Log  ( Log )
+
+-- logging-effect ----------------------
+
+import Control.Monad.Log  ( MonadLog, Severity( Informational ) )
+
+-- mockio ------------------------------
+
+import MockIO.DoMock  ( HasDoMock( doMock ) )
+
+-- mockio-log --------------------------
+
+import MockIO.Log      ( HasDoMock, mkIOLMER )
+import MockIO.IOClass  ( HasIOClass, IOClass( IORead, IOWrite ) )
+
 -- mockio-plus -------------------------
 
-import MockIO.DoMock  ( DoMock )
+import MockIO.DoMock    ( DoMock )
+import MockIO.OpenFile  ( writeFile )
 
 -- monaderror-io -----------------------
 
@@ -80,6 +99,10 @@ import MonadIO.FPath  ( getCwd )
 -- mono-traversable --------------------
 
 import Data.MonoTraversable  ( Element )
+
+-- mtl ---------------------------------
+
+import Control.Monad.Reader  ( MonadReader, ask, asks, runReaderT )
 
 -- non-empty-containers ----------------
 
@@ -99,8 +122,8 @@ import OptParsePlus  ( textualArgument, textualOption )
 
 -- parsers -----------------------------
 
-import Text.Parser.Char         ( string )
-import Text.Parser.Combinators  ( choice )
+import Text.Parser.Char         ( CharParsing, anyChar, string )
+import Text.Parser.Combinators  ( choice, optional )
 
 -- stdmain -----------------------------
 
@@ -121,6 +144,10 @@ import qualified  Text.Printer  as  P
 -- | IMDB API base URL
 imdbApiBase ∷ 𝕋
 imdbApiBase = "https://api.imdbapi.dev/titles/"
+
+-- | IMDB common interactive lookup prefix
+imdbTitlePrefix ∷ CharParsing η => η 𝕊
+imdbTitlePrefix = string "https://www.imdb.com/title/"
 
 ------------------------------------------------------------
 
@@ -228,7 +255,8 @@ data FrontMatter = FrontMatter { imdb          ∷ 𝕋
   deriving Generic
 
 instance ToJSON FrontMatter where
-  toJSON = genericToJSON defaultOptions { omitNothingFields = 𝓣 }
+  toJSON = genericToJSON defaultOptions { fieldLabelModifier = dropWhileEnd (≡'\'')
+                                        , omitNothingFields = 𝓣 }
 
 ------------------------------------------------------------
 
@@ -307,7 +335,11 @@ instance Printable IMDB_ID where
 --------------------
 
 instance Textual IMDB_ID where
-  textual = IMDB_ID ⊳ (read ⊳ (string "tt" ⋫ digits))
+  -- this is so that, we can parse, e.g.,
+  -- https://www.imdb.com/title/tt20234774/parentalguide/?ref_=tt_ov_pg#certificates
+  -- on the cmdline
+  textual =
+    IMDB_ID ⊳ (read ⊳ (optional imdbTitlePrefix ⋫ string "tt" ⋫ digits ⋪ many anyChar))
 
 ------------------------------------------------------------
 
@@ -354,13 +386,15 @@ fetchJson url = do
 ----------------------------------------
 
 -- | Sanitize title for filename
-title_filename ∷ 𝕋 → PathComponent
-title_filename title = __parse__ $
-  case breakOn " " $ T.replace "/" "-" $ T.replace ":" "-" title of
-    ("The", rest) → dropWhile (≡' ') rest ◇ "," ◇ "The"
-    ("A",   rest) → dropWhile (≡' ') rest ◇ "," ◇ "A"
-    ("An",  rest) → dropWhile (≡' ') rest ◇ "," ◇ "An"
-    (ini,   rest) → ini ◇ rest
+titleFilename ∷ 𝕋 → 𝕄 Int → PathComponent
+titleFilename title year =
+  let name = case breakOn " " $ T.replace "/" "-" $ T.replace ":" "-" title of
+               ("The", rest) → dropWhile (≡' ') rest ◇ "," ◇ "The"
+               ("A",   rest) → dropWhile (≡' ') rest ◇ "," ◇ "A"
+               ("An",  rest) → dropWhile (≡' ') rest ◇ "," ◇ "An"
+               (ini,   rest) → ini ◇ rest
+      year_text = "" ⧐ ([fmt|  [%d]|] ⊳ year)
+  in  __parse__ $ name ◇ year_text
 
 ----------------------------------------
 
@@ -376,25 +410,31 @@ formatDuration 𝓝 = "N/A"
 
 -- | Download and resize an image using ImageMagick's `magick` command
 -- downloadAndResizeImage ∷ 𝕋 → FilePath → IO ()
-downloadAndResizeImage ∷ 𝕋 → AbsFile → IO ()
+downloadAndResizeImage ∷ ∀ ε ω ρ μ .
+                         (MonadIO μ, HasDoMock ρ, MonadReader ρ μ,
+                          MonadLog (Log ω) μ, Default ω, HasIOClass ω, HasDoMock ω,
+                          AsIOError ε, Printable ε, MonadError ε μ) =>
+                         𝕋 → AbsFile → μ ()
 downloadAndResizeImage imageUrl target_path = do
+  do_mock ← asks (view doMock)
   -- Download the image to a temporary file
-  request ← HTTP.parseRequest $ T.unpack imageUrl
+  request ← liftIO $ HTTP.parseRequest $ T.unpack imageUrl
   response ← HTTP.httpBS request
   let body = HTTP.getResponseBody response
   -- XXX better construction
   -- let tempFilePath = toString target_path ◇ ".tmp"
   let temp_file_path = target_path ⊙ [pc|tmp|]
   -- XXX use something other than BSL? (e.g., MockIO)
-  BSL.writeFile (toString temp_file_path) $ BSS.fromStrict body
+  -- liftIO $ BSL.writeFile (toString temp_file_path) $ BSS.fromStrict body
+  writeFile Informational 𝓝 (𝓙 0o644) temp_file_path body do_mock
   -- BSL.writeFile tempFilePath $ BSS.fromStrict body
 
   -- Use ImageMagick to resize the image
-  Proc.callProcess "magick" [toString temp_file_path, "-resize", "600x400>", toString target_path]
+  liftIO $ Proc.callProcess "magick" [toString temp_file_path, "-resize", "600x400>", toString target_path]
 
   -- Remove the temporary file
   -- XXX use something other than Dir? (e.g., MockIO)
-  Dir.removeFile (toString temp_file_path)
+  liftIO $ Dir.removeFile (toString temp_file_path)
 
 ----------------------------------------
 
@@ -427,7 +467,11 @@ fromPC = fromSeqNE ∘ pure
 
 -- | Process a single title
 -- processTitle ∷ 𝕋 → Options → IO ()
-processTitle ∷ ∀ ε μ . (MonadIO μ,AsIOError ε,MonadError ε μ) => AbsDir → 𝕋 → Options → μ ()
+processTitle ∷ ∀ ε ω ρ μ .
+               (MonadIO μ, MonadLog (Log ω) μ, Default ω, HasIOClass ω, HasDoMock ω,
+                HasDoMock ρ, MonadReader ρ μ,
+                AsIOError ε, Printable ε, MonadError ε μ) =>
+               AbsDir → 𝕋 → Options → μ ()
 processTitle info_dir tt opts = do
   let titleUrl = T.concat [imdbApiBase, tt]
   liftIO $ putStrLn $ "trying url: " ◇ T.unpack titleUrl
@@ -436,7 +480,7 @@ processTitle info_dir tt opts = do
   case maybeTitleResponse of
     𝓝 → liftIO $ putStrLn $ "Failed to fetch title: " ◇ T.unpack tt
     𝓙 titleResponse → do
-      let sanitized_title   = title_filename $ primaryTitle titleResponse
+      let sanitized_title   = titleFilename (primaryTitle titleResponse) (startYear titleResponse)
           movies_dir        = info_dir ⫻ [reldir|movies/|]
           md_fname          = fromPC (sanitized_title ⊙ [pc|md|])
           jpg_fname         = fromPC (sanitized_title ⊙ [pc|jpg|])
@@ -470,7 +514,7 @@ processTitle info_dir tt opts = do
                   liftIO $ putStrLn $ "Writing " ◇ (toString image_target_path) ◇ "..."
                   case head posterImages of
                     𝓝    → liftIO $ putStrLn "no image found"
-                    𝓙 pI → liftIO $ downloadAndResizeImage (url pI) image_target_path -- imageTargetPath
+                    𝓙 pI → downloadAndResizeImage (url pI) image_target_path
             _ → liftIO $ putStrLn "Failed to fetch images"
 
           -- Fetch certificate
@@ -502,8 +546,10 @@ processTitle info_dir tt opts = do
 
 ----------------------------------------
 
-doMain ∷ ∀ ε μ .
-         (MonadIO μ, AsIOError ε, AsFPathError ε, MonadError ε μ) => DoMock → Options → μ ()
+doMain ∷ ∀ ε ω μ .
+         (MonadIO μ, MonadLog (Log ω) μ, Default ω, HasIOClass ω, HasDoMock ω,
+          AsIOError ε, AsFPathError ε, Printable ε, MonadError ε μ) =>
+         DoMock → Options → μ ()
 -- XXX DoMock; percolate it through
 doMain doMock opts = do
   cwd ← getCwd
@@ -514,7 +560,7 @@ doMain doMock opts = do
     moviesDirExists ← liftIO $ Dir.doesDirectoryExist "movies"
     if not moviesDirExists
       then throwUserError @_ @𝕋 "run this in an obsidian movies-info dir"
-      else Monad.forM_ (tts opts) $ \ tt → ѥ (processTitle @IOError cwd (toText tt) opts) ≫ \ case
+      else Monad.forM_ (tts opts) $ \ tt → ѥ (flip runReaderT doMock $ processTitle @IOError cwd (toText tt) opts) ≫ \ case
                                       𝓛 e → liftIO $ Exit.exitFailure -- XXX REASON/error
                                       𝓡 r → return r
 
