@@ -79,13 +79,15 @@ import MockIO.DoMock  ( HasDoMock( doMock ) )
 
 -- mockio-log --------------------------
 
-import MockIO.Log      ( HasDoMock, mkIOLMER )
-import MockIO.IOClass  ( HasIOClass, IOClass( IORead, IOWrite ) )
+import MockIO.Log          ( HasDoMock, mkIOLMER )
+import MockIO.IOClass      ( HasIOClass, IOClass( IORead, IOWrite ) )
+import MockIO.MockIOClass  ( MockIOClass )
 
 -- mockio-plus -------------------------
 
 import MockIO.DoMock    ( DoMock )
 import MockIO.OpenFile  ( writeFile )
+import MockIO.Process   ( ꙩ )
 
 -- monaderror-io -----------------------
 
@@ -94,7 +96,9 @@ import MonadError.IO.Error  ( IOError, throwUserError )
 
 -- monadio-plus ------------------------
 
-import MonadIO.FPath  ( getCwd )
+import MonadIO.Error.CreateProcError  ( AsCreateProcError )
+import MonadIO.FPath                  ( getCwd )
+import MonadIO.Error.ProcExitError    ( AsProcExitError )
 
 -- mono-traversable --------------------
 
@@ -127,7 +131,8 @@ import Text.Parser.Combinators  ( choice, optional )
 
 -- stdmain -----------------------------
 
-import StdMain  ( stdMainSimple )
+import StdMain             ( stdMainSimple )
+import StdMain.UsageError  ( UsageParseFPProcIOError )
 
 -- text --------------------------------
 
@@ -410,27 +415,23 @@ formatDuration 𝓝 = "N/A"
 
 -- | Download and resize an image using ImageMagick's `magick` command
 -- downloadAndResizeImage ∷ 𝕋 → FilePath → IO ()
-downloadAndResizeImage ∷ ∀ ε ω ρ μ .
+downloadAndResizeImage ∷ ∀ ε ρ μ .
                          (MonadIO μ, HasDoMock ρ, MonadReader ρ μ,
-                          MonadLog (Log ω) μ, Default ω, HasIOClass ω, HasDoMock ω,
-                          AsIOError ε, Printable ε, MonadError ε μ) =>
+                          MonadLog (Log MockIOClass) μ,
+                          AsFPathError ε, AsIOError ε,
+                          AsCreateProcError ε, AsProcExitError ε, Printable ε, MonadError ε μ) =>
                          𝕋 → AbsFile → μ ()
-downloadAndResizeImage imageUrl target_path = do
+downloadAndResizeImage image_url target_path = do
   do_mock ← asks (view doMock)
   -- Download the image to a temporary file
-  request ← liftIO $ HTTP.parseRequest $ T.unpack imageUrl
-  response ← HTTP.httpBS request
-  let body = HTTP.getResponseBody response
-  -- XXX better construction
-  -- let tempFilePath = toString target_path ◇ ".tmp"
   let temp_file_path = target_path ⊙ [pc|tmp|]
-  -- XXX use something other than BSL? (e.g., MockIO)
-  -- liftIO $ BSL.writeFile (toString temp_file_path) $ BSS.fromStrict body
+  body ← fetchResponse image_url
   writeFile Informational 𝓝 (𝓙 0o644) temp_file_path body do_mock
-  -- BSL.writeFile tempFilePath $ BSS.fromStrict body
 
   -- Use ImageMagick to resize the image
+  let magick = [absfile|/run/current-system/sw/bin/magick|]
   liftIO $ Proc.callProcess "magick" [toString temp_file_path, "-resize", "600x400>", toString target_path]
+  (_,()) ← ꙩ (magick, [toText temp_file_path, "-resize", "600x400>", toText target_path])
 
   -- Remove the temporary file
   -- XXX use something other than Dir? (e.g., MockIO)
@@ -467,10 +468,10 @@ fromPC = fromSeqNE ∘ pure
 
 -- | Process a single title
 -- processTitle ∷ 𝕋 → Options → IO ()
-processTitle ∷ ∀ ε ω ρ μ .
-               (MonadIO μ, MonadLog (Log ω) μ, Default ω, HasIOClass ω, HasDoMock ω,
+processTitle ∷ ∀ ε ρ μ .
+               (MonadIO μ, MonadLog (Log MockIOClass) μ,
                 HasDoMock ρ, MonadReader ρ μ,
-                AsIOError ε, Printable ε, MonadError ε μ) =>
+                AsFPathError ε, AsIOError ε, AsCreateProcError ε, AsProcExitError ε, Printable ε, MonadError ε μ) =>
                AbsDir → 𝕋 → Options → μ ()
 processTitle info_dir tt opts = do
   let titleUrl = T.concat [imdbApiBase, tt]
@@ -546,8 +547,8 @@ processTitle info_dir tt opts = do
 
 ----------------------------------------
 
-doMain ∷ ∀ ε ω μ .
-         (MonadIO μ, MonadLog (Log ω) μ, Default ω, HasIOClass ω, HasDoMock ω,
+doMain ∷ ∀ ε μ .
+         (MonadIO μ, MonadLog (Log MockIOClass) μ,
           AsIOError ε, AsFPathError ε, Printable ε, MonadError ε μ) =>
          DoMock → Options → μ ()
 -- XXX DoMock; percolate it through
@@ -560,7 +561,7 @@ doMain doMock opts = do
     moviesDirExists ← liftIO $ Dir.doesDirectoryExist "movies"
     if not moviesDirExists
       then throwUserError @_ @𝕋 "run this in an obsidian movies-info dir"
-      else Monad.forM_ (tts opts) $ \ tt → ѥ (flip runReaderT doMock $ processTitle @IOError cwd (toText tt) opts) ≫ \ case
+      else Monad.forM_ (tts opts) $ \ tt → ѥ (flip runReaderT doMock $ processTitle @UsageParseFPProcIOError cwd (toText tt) opts) ≫ \ case
                                       𝓛 e → liftIO $ Exit.exitFailure -- XXX REASON/error
                                       𝓡 r → return r
 
