@@ -14,7 +14,7 @@ module Main where
 import Base1
 
 -- putStrLn => log, or error?
-import Prelude  ( FilePath, Int, div, error, filter, map, mod, null, putStrLn, undefined )
+import Prelude  ( FilePath, Int, div, error, filter, map, mod, null, putStrLn )
 
 import qualified Data.ByteString      as BSS
 import qualified Data.Text.IO         as TIO
@@ -62,7 +62,6 @@ import FPath.RelDir            ( reldir )
 -- lens --------------------------------
 
 import Control.Lens.Getter  ( view )
-import Control.Lens.Lens    ( Lens', lens )
 
 -- log-plus ----------------------------
 
@@ -237,7 +236,7 @@ instance FromJSON ImageResponse where
 newtype MyURI = MyURI { unMyURI ∷ URI } deriving Show
 
 myURI ∷ Lens' MyURI URI
-myURI = lens unMyURI (\ m u → MyURI u)
+myURI = lens unMyURI (\ _ u → MyURI u)
 
 instance FromJSON MyURI where
   parseJSON = withText "MyURI" $ \ t → either (parseFail ∘ show) (pure ∘ MyURI) $ mkURI t
