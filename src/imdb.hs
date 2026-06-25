@@ -501,8 +501,8 @@ processTitle ∷ ∀ ε ρ μ .
                (MonadIO μ, MonadLog (Log MockIOClass) μ,
                 HasDoMock ρ, MonadReader ρ μ,
                 AsFPathError ε, AsIOError ε, AsCreateProcError ε, AsProcExitError ε, Printable ε, MonadError ε μ) =>
-               AbsDir → IMDB_ID → Options → μ ()
-processTitle info_dir tt opts = do
+               AbsDir → Options → IMDB_ID → μ ()
+processTitle info_dir opts tt = do
   let title_uri = imdbApiBase & uriPath ⊧ (◇ [toPathPiece tt])
   liftIO $ putStrLn $ "trying url: " ◇ renderStr title_uri
   -- XXX this should fail with, e.g., https://api.imdbapi.dev/titles/tt107206
@@ -583,7 +583,7 @@ doMain ∷ ∀ ε μ .
           MonadError ε μ) =>
          DoMock → Options → μ ()
 -- XXX DoMock; percolate it through
-doMain doMock opts = do
+doMain do_mock opts = do
   cwd ← getCwd
   if null (tts opts)
   then throwUserError @_ @𝕋 "no titles provided"
@@ -592,7 +592,7 @@ doMain doMock opts = do
     moviesDirExists ← liftIO $ Dir.doesDirectoryExist "movies"
     if not moviesDirExists
       then throwUserError @_ @𝕋 "run this in an obsidian movies-info dir"
-      else Monad.forM_ (tts opts) $ \ tt → flip runReaderT doMock $ processTitle cwd tt opts
+      else Monad.forM_ (tts opts) $ flip runReaderT do_mock ∘ processTitle cwd opts
 
 ----------------------------------------
 
