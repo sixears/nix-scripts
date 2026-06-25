@@ -17,15 +17,12 @@ import Base1
 import Prelude  ( FilePath, Int, div, error, filter, map, mod, null, putStrLn )
 
 import qualified Data.ByteString      as BSS
-import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Text.IO         as TIO
 import qualified Network.HTTP.Simple  as HTTP
 import qualified System.Directory     as Dir
 import qualified System.FilePath      as FP
-import qualified System.Process       as Proc
 import qualified Data.Maybe           as Maybe
 import qualified Control.Monad        as Monad
-import qualified System.Exit          as Exit
 import qualified Data.Yaml            as Yaml
 import qualified Data.Text            as T
 
@@ -61,7 +58,6 @@ import FPath.FileLike          ( (⊙) )
 import FPath.Parseable         ( __parse__ )
 import FPath.PathComponent     ( PathComponent, pc )
 import FPath.RelDir            ( reldir )
-import FPath.RelFile           ( RelFile )
 
 -- lens --------------------------------
 
@@ -81,8 +77,6 @@ import MockIO.DoMock  ( HasDoMock( doMock ) )
 
 -- mockio-log --------------------------
 
-import MockIO.Log          ( HasDoMock, mkIOLMER )
-import MockIO.IOClass      ( HasIOClass, IOClass( IORead, IOWrite ) )
 import MockIO.MockIOClass  ( MockIOClass )
 
 -- mockio-plus -------------------------
@@ -95,8 +89,8 @@ import MockIO.Process.MLCmdSpec  ( ToMLCmdSpec )
 
 -- monaderror-io -----------------------
 
-import MonadError           ( eitherME, fromRight )
-import MonadError.IO.Error  ( IOError, throwUserError )
+import MonadError           ( eitherME )
+import MonadError.IO.Error  ( throwUserError )
 
 -- monadio-plus ------------------------
 
@@ -111,13 +105,13 @@ import Data.MonoTraversable  ( Element )
 -- modern-uri --------------------------
 
 import Text.URI       ( RText, RTextLabel( PathPiece ), URI,
-                        mkPathPiece, mkURI, render, renderStr )
+                        mkPathPiece, mkURI, renderStr )
 import Text.URI.Lens  ( uriPath )
 import Text.URI.QQ    ( pathPiece, uri )
 
 -- mtl ---------------------------------
 
-import Control.Monad.Reader  ( MonadReader, ask, asks, runReaderT )
+import Control.Monad.Reader  ( MonadReader, asks, runReaderT )
 
 -- non-empty-containers ----------------
 
@@ -142,8 +136,7 @@ import Text.Parser.Combinators  ( choice, optional )
 
 -- stdmain -----------------------------
 
-import StdMain             ( stdMainSimple )
-import StdMain.UsageError  ( UsageParseFPProcIOError )
+import StdMain  ( stdMainSimple )
 
 -- text --------------------------------
 
@@ -394,8 +387,8 @@ parseRequest = eitherME (userE ∘ show) ∘ HTTP.parseRequest ∘ renderStr
 ----------------------------------------
 
 fetchResponse ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => URI → μ ByteString
-fetchResponse uri = do
-  response ← parseRequest uri ≫ HTTP.httpBS
+fetchResponse uri_ = do
+  response ← parseRequest uri_ ≫ HTTP.httpBS
   let status = HTTP.getResponseStatusCode response
   if status == 200
   then return $ HTTP.getResponseBody response
@@ -404,8 +397,8 @@ fetchResponse uri = do
 ----------------------------------------
 
 fetchJson ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, FromJSON a) => URI → μ (𝕄 a)
-fetchJson uri = do
-  (Aeson.eitherDecode ∘ BSS.fromStrict) ⊳ fetchResponse uri ≫ \ case
+fetchJson uri_ = do
+  (Aeson.eitherDecode ∘ BSS.fromStrict) ⊳ fetchResponse uri_ ≫ \ case
     𝓛 err    → throwUserError $ "Error decoding JSON: " ◇ err
     𝓡 result → return $ 𝓙 result
 
