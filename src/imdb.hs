@@ -388,19 +388,14 @@ parseOptions =
 
 ------------------------------------------------------------
 
-parseRequest ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => 𝕋 → μ HTTP.Request
-parseRequest url = eitherME (userE ∘ show) $ HTTP.parseRequest $ T.unpack url
+parseRequest ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => URI → μ HTTP.Request
+parseRequest = eitherME (userE ∘ show) ∘ HTTP.parseRequest ∘ renderStr
 
 ----------------------------------------
 
-parseRequest' ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => URI → μ HTTP.Request
-parseRequest' = eitherME (userE ∘ show) ∘ HTTP.parseRequest ∘ renderStr
-
-----------------------------------------
-
-fetchResponse ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => 𝕋 → μ ByteString
-fetchResponse url = do
-  response ← parseRequest url ≫ HTTP.httpBS
+fetchResponse ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => URI → μ ByteString
+fetchResponse uri = do
+  response ← parseRequest uri ≫ HTTP.httpBS
   let status = HTTP.getResponseStatusCode response
   if status == 200
   then return $ HTTP.getResponseBody response
@@ -408,27 +403,9 @@ fetchResponse url = do
 
 ----------------------------------------
 
-fetchResponse' ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => URI → μ ByteString
-fetchResponse' uri = do
-  response ← parseRequest' uri ≫ HTTP.httpBS
-  let status = HTTP.getResponseStatusCode response
-  if status == 200
-  then return $ HTTP.getResponseBody response
-  else throwUserError $ "HTTP error: " ◇ show status
-
-----------------------------------------
-
-fetchJson ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, FromJSON a) => 𝕋 → μ (𝕄 a)
-fetchJson url = do
-  (Aeson.eitherDecode ∘ BSS.fromStrict) ⊳ fetchResponse url ≫ \ case
-    𝓛 err    → throwUserError $ "Error decoding JSON: " ◇ err
-    𝓡 result → return $ 𝓙 result
-
-----------------------------------------
-
-fetchJson' ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, FromJSON a) => URI → μ (𝕄 a)
-fetchJson' uri = do
-  (Aeson.eitherDecode ∘ BSS.fromStrict) ⊳ fetchResponse' uri ≫ \ case
+fetchJson ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, FromJSON a) => URI → μ (𝕄 a)
+fetchJson uri = do
+  (Aeson.eitherDecode ∘ BSS.fromStrict) ⊳ fetchResponse uri ≫ \ case
     𝓛 err    → throwUserError $ "Error decoding JSON: " ◇ err
     𝓡 result → return $ 𝓙 result
 
@@ -480,7 +457,7 @@ downloadAndResizeImage image_uri target_path = do
   do_mock ← asks (view doMock)
   -- Download the image to a temporary file
   let temp_file_path = target_path ⊙ [pc|tmp|]
-  body ← fetchResponse' image_uri
+  body ← fetchResponse image_uri
   writeFile Informational 𝓝 (𝓙 0o644) temp_file_path body do_mock
 
   -- Use ImageMagick to resize the image
@@ -529,7 +506,7 @@ processTitle info_dir tt opts = do
   let title_uri = imdbApiBase & uriPath ⊧ (◇ [toPathPiece tt])
   liftIO $ putStrLn $ "trying url: " ◇ renderStr title_uri
   -- XXX this should fail with, e.g., https://api.imdbapi.dev/titles/tt107206
-  maybeTitleResponse ← fetchJson' title_uri
+  maybeTitleResponse ← fetchJson title_uri
   case maybeTitleResponse of
     𝓝 → liftIO $ putStrLn $ "Failed to fetch title: " ◇ toString tt
     𝓙 titleResponse → do
@@ -558,7 +535,7 @@ processTitle info_dir tt opts = do
 
           -- Fetch and process images
           let imagesUrl = imdbApiBase & uriPath ⊧ (◇ [tt_pp, [pathPiece|images|]])
-          maybeImageResponse ← fetchJson' imagesUrl
+          maybeImageResponse ← fetchJson imagesUrl
           case maybeImageResponse of
             𝓙 imageResponse → do
               let posterImages = filter (\ image → (imageType image) == "poster") (images imageResponse)
@@ -573,7 +550,7 @@ processTitle info_dir tt opts = do
 
           -- Fetch certificate
           let certificate_url = imdbApiBase & uriPath ⊧ (◇ [tt_pp, [pathPiece|certificates|]])
-          maybeCertificateResponse ← fetchJson' certificate_url
+          maybeCertificateResponse ← fetchJson certificate_url
           let ukCertificate = case maybeCertificateResponse of
                 𝓙 certificateResponse →
                   Maybe.listToMaybe $ map rating $ filter (\ certificate → code (country certificate) == "GB") (certificates certificateResponse)
