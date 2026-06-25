@@ -579,7 +579,8 @@ processTitle info_dir tt opts = do
 
 doMain ∷ ∀ ε μ .
          (MonadIO μ, MonadLog (Log MockIOClass) μ,
-          AsIOError ε, AsFPathError ε, Printable ε, MonadError ε μ) =>
+          AsIOError ε, AsFPathError ε, AsCreateProcError ε, AsProcExitError ε, Printable ε,
+          MonadError ε μ) =>
          DoMock → Options → μ ()
 -- XXX DoMock; percolate it through
 doMain doMock opts = do
@@ -591,9 +592,7 @@ doMain doMock opts = do
     moviesDirExists ← liftIO $ Dir.doesDirectoryExist "movies"
     if not moviesDirExists
       then throwUserError @_ @𝕋 "run this in an obsidian movies-info dir"
-      else Monad.forM_ (tts opts) $ \ tt → ѥ (flip runReaderT doMock $ processTitle @UsageParseFPProcIOError cwd tt opts) ≫ \ case
-                                      𝓛 e → liftIO $ Exit.exitFailure -- XXX REASON/error
-                                      𝓡 r → return r
+      else Monad.forM_ (tts opts) $ \ tt → flip runReaderT doMock $ processTitle cwd tt opts
 
 ----------------------------------------
 
