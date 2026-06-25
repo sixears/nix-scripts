@@ -14,7 +14,7 @@ module Main where
 import Base1
 
 -- putStrLn => log, or error?
-import Prelude  ( FilePath, Int, div, error, filter, map, mod, null, putStrLn )
+import Prelude  ( FilePath, Int, div, error, filter, map, mod, null, putStrLn, undefined )
 
 import qualified Data.ByteString      as BSS
 import qualified Data.Text.IO         as TIO
@@ -62,10 +62,11 @@ import FPath.RelDir            ( reldir )
 -- lens --------------------------------
 
 import Control.Lens.Getter  ( view )
+import Control.Lens.Lens    ( Lens', lens )
 
 -- log-plus ----------------------------
 
-import Log  ( Log )
+import Log  ( Log, infoT )
 
 -- logging-effect ----------------------
 
@@ -105,7 +106,7 @@ import Data.MonoTraversable  ( Element )
 -- modern-uri --------------------------
 
 import Text.URI       ( RText, RTextLabel( PathPiece ), URI,
-                        mkPathPiece, mkURI, renderStr )
+                        mkPathPiece, mkURI, render, renderStr )
 import Text.URI.Lens  ( uriPath )
 import Text.URI.QQ    ( pathPiece, uri )
 
@@ -149,16 +150,6 @@ import Data.Text.Encoding.Error  ( lenientDecode )
 import qualified  Text.Printer  as  P
 
 --------------------------------------------------------------------------------
-
--- | IMDB API base URL
-imdbApiBase ∷ URI
-imdbApiBase = [uri|https://api.imdbapi.dev/titles|]
-
--- | IMDB common interactive lookup prefix
-imdbTitlePrefix ∷ CharParsing η => η 𝕊
-imdbTitlePrefix = string "https://www.imdb.com/title/"
-
-------------------------------------------------------------
 
 -- | Data types for IMDB responses
 
@@ -243,10 +234,20 @@ instance FromJSON ImageResponse where
 
 ------------------------------------------------------------
 
-data Image = Image { imageType ∷ 𝕋, url ∷ URI } deriving Show
+newtype MyURI = MyURI { unMyURI ∷ URI } deriving Show
 
-instance FromJSON URI where
-  parseJSON = withText "URI" $ \ t → either (parseFail ∘ show) pure $ mkURI t
+myURI ∷ Lens' MyURI URI
+myURI = lens unMyURI (\ m u → MyURI u)
+
+instance FromJSON MyURI where
+  parseJSON = withText "MyURI" $ \ t → either (parseFail ∘ show) (pure ∘ MyURI) $ mkURI t
+
+instance Printable MyURI where
+  print = P.text ∘ render ∘ unMyURI
+
+------------------------------------------------------------
+
+data Image = Image { imageType ∷ 𝕋, url ∷ MyURI } deriving Show
 
 instance FromJSON Image where
   parseJSON = withObject "Image" $ \ v → Image <$> v .: "type" <*> (v .: "url")
@@ -337,7 +338,11 @@ parsePerson _        = 𝓝
 
 ------------------------------------------------------------
 
-class    ToPathPiece α                  where toPathPiece ∷ α → RText 'PathPiece
+class    ToPathPiece α where
+  toPathPiece ∷ α → RText 'PathPiece
+  ҩ ∷ α → RText 'PathPiece
+  ҩ = toPathPiece
+
 instance ToPathPiece (RText 'PathPiece) where toPathPiece = id
 
 ------------------------------------------------------------
@@ -381,12 +386,22 @@ parseOptions =
 
 ------------------------------------------------------------
 
-parseRequest ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => URI → μ HTTP.Request
-parseRequest = eitherME (userE ∘ show) ∘ HTTP.parseRequest ∘ renderStr
+-- | IMDB API base URL
+imdbApiBase ∷ MyURI
+imdbApiBase = MyURI [uri|https://api.imdbapi.dev/titles|]
+
+-- | IMDB common interactive lookup prefix
+imdbTitlePrefix ∷ CharParsing η => η 𝕊
+imdbTitlePrefix = string "https://www.imdb.com/title/"
 
 ----------------------------------------
 
-fetchResponse ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => URI → μ ByteString
+parseRequest ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => MyURI → μ HTTP.Request
+parseRequest = eitherME (userE ∘ show) ∘ HTTP.parseRequest ∘ renderStr ∘ unMyURI
+
+----------------------------------------
+
+fetchResponse ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => MyURI → μ ByteString
 fetchResponse uri_ = do
   response ← parseRequest uri_ ≫ HTTP.httpBS
   let status = HTTP.getResponseStatusCode response
@@ -396,7 +411,7 @@ fetchResponse uri_ = do
 
 ----------------------------------------
 
-fetchJson ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, FromJSON a) => URI → μ (𝕄 a)
+fetchJson ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, FromJSON a) => MyURI→μ (𝕄 a)
 fetchJson uri_ = do
   (Aeson.eitherDecode ∘ BSS.fromStrict) ⊳ fetchResponse uri_ ≫ \ case
     𝓛 err    → throwUserError $ "Error decoding JSON: " ◇ err
@@ -444,7 +459,7 @@ downloadAndResizeImage ∷ ∀ ε ρ μ .
                           MonadLog (Log MockIOClass) μ,
                           AsFPathError ε, AsIOError ε,AsCreateProcError ε,AsProcExitError ε,
                           Printable ε, MonadError ε μ) =>
-                         URI → AbsFile → μ ()
+                         MyURI → AbsFile → μ ()
 
 downloadAndResizeImage image_uri target_path = do
   do_mock ← asks (view doMock)
@@ -487,6 +502,17 @@ writeMarkdownFile tt sanitizedTitle ukCert titleResponse targetPath = do
 fromPC ∷ (Element α ~ PathComponent, FromSeqNonEmpty α) => PathComponent → α
 fromPC = fromSeqNE ∘ pure
 
+{-| things we can append to a URI -}
+class UAppend α where
+  uAppend ∷ MyURI → α → MyURI
+  (‡) ∷ MyURI → α → MyURI
+  (‡) = uAppend
+
+instance UAppend [RText 'PathPiece] where
+  uAppend uri_ pieces = uri_ & (myURI ∘ uriPath) ⊧ (◇ pieces)
+
+instance UAppend (RText 'PathPiece) where
+  uAppend uri_ piece = uAppend uri_ [piece]
 
 -- | Process a single title
 -- processTitle ∷ 𝕋 → Options → IO ()
@@ -496,8 +522,9 @@ processTitle ∷ ∀ ε ρ μ .
                 AsFPathError ε, AsIOError ε, AsCreateProcError ε, AsProcExitError ε, Printable ε, MonadError ε μ) =>
                AbsDir → Options → IMDB_ID → μ ()
 processTitle info_dir opts tt = do
-  let title_uri = imdbApiBase & uriPath ⊧ (◇ [toPathPiece tt])
-  liftIO $ putStrLn $ "trying url: " ◇ renderStr title_uri
+  let title_uri = imdbApiBase ‡ ҩ tt -- imdbApiBase & (myURI ∘ uriPath) ⊧ (◇ [toPathPiece tt])
+  infoT $ [fmt|trying uri: %T|] title_uri
+--  liftIO $ putStrLn $ "trying url: " ◇ renderStr title_uri
   -- XXX this should fail with, e.g., https://api.imdbapi.dev/titles/tt107206
   maybeTitleResponse ← fetchJson title_uri
   case maybeTitleResponse of
@@ -527,7 +554,7 @@ processTitle info_dir opts tt = do
           liftIO $ Dir.createDirectoryIfMissing 𝓣 (toString attachment_dir)
 
           -- Fetch and process images
-          let imagesUrl = imdbApiBase & uriPath ⊧ (◇ [tt_pp, [pathPiece|images|]])
+          let imagesUrl = imdbApiBase ‡ [tt_pp, [pathPiece|images|]] -- imdbApiBase & uriPath ⊧ (◇ [tt_pp, [pathPiece|images|]])
           maybeImageResponse ← fetchJson imagesUrl
           case maybeImageResponse of
             𝓙 imageResponse → do
@@ -542,7 +569,8 @@ processTitle info_dir opts tt = do
             _ → liftIO $ putStrLn "Failed to fetch images"
 
           -- Fetch certificate
-          let certificate_url = imdbApiBase & uriPath ⊧ (◇ [tt_pp, [pathPiece|certificates|]])
+--          let certificate_url = imdbApiBase & uriPath ⊧ (◇ [tt_pp, [pathPiece|certificates|]])
+          let certificate_url = imdbApiBase ‡ [tt_pp, [pathPiece|certificates|]]
           maybeCertificateResponse ← fetchJson certificate_url
           let ukCertificate = case maybeCertificateResponse of
                 𝓙 certificateResponse →
