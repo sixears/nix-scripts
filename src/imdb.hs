@@ -1,6 +1,7 @@
 -- IMDB to Obsidian Haskell Script
 -- Uses ImageMagick (`magick`) for image resizing via command line
 
+{-# LANGUAGE DataKinds         #-}
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE NoImplicitPrelude #-}
@@ -13,7 +14,7 @@ module Main where
 import Base1
 
 -- putStrLn => log, or error?
-import Prelude  ( FilePath, Int, div, filter, map, mod, null, putStrLn )
+import Prelude  ( FilePath, Int, div, error, filter, map, mod, null, putStrLn )
 
 import qualified Data.ByteString      as BSS
 import qualified Data.ByteString.Lazy as BSL
@@ -32,8 +33,9 @@ import qualified Data.Text            as T
 
 import qualified Data.Aeson           as Aeson
 
-import Data.Aeson  ( FromJSON, ToJSON, (.:), (.:?), defaultOptions, fieldLabelModifier,
-                     omitNothingFields, genericToJSON, withObject )
+import Data.Aeson        ( FromJSON, ToJSON, (.:), (.:?), defaultOptions,fieldLabelModifier,
+                           omitNothingFields, genericToJSON, withObject, withText )
+import Data.Aeson.Types  ( parseFail )
 
 -- base --------------------------------
 
@@ -85,13 +87,15 @@ import MockIO.MockIOClass  ( MockIOClass )
 
 -- mockio-plus -------------------------
 
-import MockIO.DoMock    ( DoMock )
-import MockIO.OpenFile  ( writeFile )
-import MockIO.Process   ( ꙩ )
+import MockIO.DoMock             ( DoMock )
+import MockIO.File               ( unlink )
+import MockIO.OpenFile           ( writeFile )
+import MockIO.Process            ( ꙩ )
+import MockIO.Process.MLCmdSpec  ( ToMLCmdSpec )
 
 -- monaderror-io -----------------------
 
-import MonadError           ( eitherME )
+import MonadError           ( eitherME, fromRight )
 import MonadError.IO.Error  ( IOError, throwUserError )
 
 -- monadio-plus ------------------------
@@ -103,6 +107,13 @@ import MonadIO.Error.ProcExitError    ( AsProcExitError )
 -- mono-traversable --------------------
 
 import Data.MonoTraversable  ( Element )
+
+-- modern-uri --------------------------
+
+import Text.URI       ( RText, RTextLabel( PathPiece ), URI,
+                        mkPathPiece, mkURI, render, renderStr )
+import Text.URI.Lens  ( uriPath )
+import Text.URI.QQ    ( pathPiece, uri )
 
 -- mtl ---------------------------------
 
@@ -147,8 +158,8 @@ import qualified  Text.Printer  as  P
 --------------------------------------------------------------------------------
 
 -- | IMDB API base URL
-imdbApiBase ∷ 𝕋
-imdbApiBase = "https://api.imdbapi.dev/titles/"
+imdbApiBase ∷ URI
+imdbApiBase = [uri|https://api.imdbapi.dev/titles|]
 
 -- | IMDB common interactive lookup prefix
 imdbTitlePrefix ∷ CharParsing η => η 𝕊
@@ -239,10 +250,13 @@ instance FromJSON ImageResponse where
 
 ------------------------------------------------------------
 
-data Image = Image { imageType ∷ 𝕋, url ∷ 𝕋 } deriving Show
+data Image = Image { imageType ∷ 𝕋, url ∷ URI } deriving Show
+
+instance FromJSON URI where
+  parseJSON = withText "URI" $ \ t → either (parseFail ∘ show) pure $ mkURI t
 
 instance FromJSON Image where
-  parseJSON = withObject "Image" $ \ v → do Image <$> v .: "type" <*> v .: "url"
+  parseJSON = withObject "Image" $ \ v → Image <$> v .: "type" <*> (v .: "url")
 
 ------------------------------------------------------------
 
@@ -330,6 +344,11 @@ parsePerson _        = 𝓝
 
 ------------------------------------------------------------
 
+class    ToPathPiece α                  where toPathPiece ∷ α → RText 'PathPiece
+instance ToPathPiece (RText 'PathPiece) where toPathPiece = id
+
+------------------------------------------------------------
+
 data IMDB_ID = IMDB_ID ℕ  deriving  Show
 
 --------------------
@@ -346,13 +365,15 @@ instance Textual IMDB_ID where
   textual =
     IMDB_ID ⊳ (read ⊳ (optional imdbTitlePrefix ⋫ string "tt" ⋫ digits ⋪ many anyChar))
 
+--------------------
+
+instance ToPathPiece IMDB_ID where
+  toPathPiece  = either (error ∘ show) id ∘ mkPathPiece ∘ toText
+
 ------------------------------------------------------------
 
 -- | Command line options
-data Options = Options { tts    :: [IMDB_ID]
-                       , people :: [Person]
-                       , seen   :: [Person]
-                       }
+data Options = Options { tts :: [IMDB_ID], people :: [Person], seen :: [Person] }
   deriving Show
 
 ----------------------------------------
@@ -372,6 +393,11 @@ parseRequest url = eitherME (userE ∘ show) $ HTTP.parseRequest $ T.unpack url
 
 ----------------------------------------
 
+parseRequest' ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => URI → μ HTTP.Request
+parseRequest' = eitherME (userE ∘ show) ∘ HTTP.parseRequest ∘ renderStr
+
+----------------------------------------
+
 fetchResponse ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => 𝕋 → μ ByteString
 fetchResponse url = do
   response ← parseRequest url ≫ HTTP.httpBS
@@ -382,9 +408,27 @@ fetchResponse url = do
 
 ----------------------------------------
 
+fetchResponse' ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => URI → μ ByteString
+fetchResponse' uri = do
+  response ← parseRequest' uri ≫ HTTP.httpBS
+  let status = HTTP.getResponseStatusCode response
+  if status == 200
+  then return $ HTTP.getResponseBody response
+  else throwUserError $ "HTTP error: " ◇ show status
+
+----------------------------------------
+
 fetchJson ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, FromJSON a) => 𝕋 → μ (𝕄 a)
 fetchJson url = do
   (Aeson.eitherDecode ∘ BSS.fromStrict) ⊳ fetchResponse url ≫ \ case
+    𝓛 err    → throwUserError $ "Error decoding JSON: " ◇ err
+    𝓡 result → return $ 𝓙 result
+
+----------------------------------------
+
+fetchJson' ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, FromJSON a) => URI → μ (𝕄 a)
+fetchJson' uri = do
+  (Aeson.eitherDecode ∘ BSS.fromStrict) ⊳ fetchResponse' uri ≫ \ case
     𝓛 err    → throwUserError $ "Error decoding JSON: " ◇ err
     𝓡 result → return $ 𝓙 result
 
@@ -413,32 +457,40 @@ formatDuration 𝓝 = "N/A"
 
 ----------------------------------------
 
+ꙭ ∷ ∀ ε δ α μ . (MonadIO μ, ToMLCmdSpec α (), MonadLog (Log MockIOClass) μ,
+                 MonadReader δ μ, HasDoMock δ,
+                 AsIOError ε, AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
+                 Printable ε, MonadError ε μ) =>
+    α → μ ()
+
+ꙭ = snd ⩺ ꙩ
+
+----------------------------------------
+
 -- | Download and resize an image using ImageMagick's `magick` command
 -- downloadAndResizeImage ∷ 𝕋 → FilePath → IO ()
 downloadAndResizeImage ∷ ∀ ε ρ μ .
                          (MonadIO μ, HasDoMock ρ, MonadReader ρ μ,
                           MonadLog (Log MockIOClass) μ,
-                          AsFPathError ε, AsIOError ε,
-                          AsCreateProcError ε, AsProcExitError ε, Printable ε, MonadError ε μ) =>
-                         𝕋 → AbsFile → μ ()
-downloadAndResizeImage image_url target_path = do
+                          AsFPathError ε, AsIOError ε,AsCreateProcError ε,AsProcExitError ε,
+                          Printable ε, MonadError ε μ) =>
+                         URI → AbsFile → μ ()
+
+downloadAndResizeImage image_uri target_path = do
   do_mock ← asks (view doMock)
   -- Download the image to a temporary file
   let temp_file_path = target_path ⊙ [pc|tmp|]
-  body ← fetchResponse image_url
+  body ← fetchResponse' image_uri
   writeFile Informational 𝓝 (𝓙 0o644) temp_file_path body do_mock
 
   -- Use ImageMagick to resize the image
-  let magick = [absfile|/run/current-system/sw/bin/magick|]
-  liftIO $ Proc.callProcess "magick" [toString temp_file_path, "-resize", "600x400>", toString target_path]
-  (_,()) ← ꙩ (magick, [toText temp_file_path, "-resize", "600x400>", toText target_path])
+  ꙭ ([absfile|/run/current-system/sw/bin/magick|],
+     [toText temp_file_path, "-resize", "600x400>", toText target_path])
 
   -- Remove the temporary file
-  -- XXX use something other than Dir? (e.g., MockIO)
-  liftIO $ Dir.removeFile (toString temp_file_path)
+  unlink Informational temp_file_path do_mock
 
 ----------------------------------------
-
 
 writeMarkdownFile ∷ MonadIO μ => 𝕋 → 𝕋 → 𝕄 𝕋 → TitleResponse → FilePath → μ ()
 writeMarkdownFile tt sanitizedTitle ukCert titleResponse targetPath = do
@@ -472,14 +524,14 @@ processTitle ∷ ∀ ε ρ μ .
                (MonadIO μ, MonadLog (Log MockIOClass) μ,
                 HasDoMock ρ, MonadReader ρ μ,
                 AsFPathError ε, AsIOError ε, AsCreateProcError ε, AsProcExitError ε, Printable ε, MonadError ε μ) =>
-               AbsDir → 𝕋 → Options → μ ()
+               AbsDir → IMDB_ID → Options → μ ()
 processTitle info_dir tt opts = do
-  let titleUrl = T.concat [imdbApiBase, tt]
-  liftIO $ putStrLn $ "trying url: " ◇ T.unpack titleUrl
+  let title_uri = imdbApiBase & uriPath ⊧ (◇ [toPathPiece tt])
+  liftIO $ putStrLn $ "trying url: " ◇ renderStr title_uri
   -- XXX this should fail with, e.g., https://api.imdbapi.dev/titles/tt107206
-  maybeTitleResponse ← fetchJson titleUrl
+  maybeTitleResponse ← fetchJson' title_uri
   case maybeTitleResponse of
-    𝓝 → liftIO $ putStrLn $ "Failed to fetch title: " ◇ T.unpack tt
+    𝓝 → liftIO $ putStrLn $ "Failed to fetch title: " ◇ toString tt
     𝓙 titleResponse → do
       let sanitized_title   = titleFilename (primaryTitle titleResponse) (startYear titleResponse)
           movies_dir        = info_dir ⫻ [reldir|movies/|]
@@ -490,12 +542,13 @@ processTitle info_dir tt opts = do
           target_path       = movies_dir ⫻ md_fname
           attachment_dir    = movies_dir ⫻ [reldir|_attachments/|]
           image_target_path = attachment_dir ⫻ jpg_fname
-      -- Check if the file already exists
-      liftIO $ putStrLn $ "Fetched title: " ◇ T.unpack tt
+          tt_pp             = toPathPiece tt
+      -- check if the file already exists
+      liftIO $ putStrLn $ "Fetched title: " ◇ toString tt
           -- XXX use something better than Dir, e.g., MockIO
       exists ← liftIO $ Dir.doesFileExist (toString target_path)
       if exists
-        then liftIO $ putStrLn $ "Already exists: " ◇ toString target_path ◇ " (" ◇ T.unpack tt ◇ ")"
+        then liftIO $ putStrLn $ "Already exists: " ◇ toString target_path ◇ " (" ◇ toString tt ◇ ")"
         else do
           liftIO $ putStrLn $ "Found title: " ◇ T.unpack (primaryTitle titleResponse)
 
@@ -504,8 +557,8 @@ processTitle info_dir tt opts = do
           liftIO $ Dir.createDirectoryIfMissing 𝓣 (toString attachment_dir)
 
           -- Fetch and process images
-          let imagesUrl = T.concat [imdbApiBase, tt, "/images"]
-          maybeImageResponse ← fetchJson imagesUrl
+          let imagesUrl = imdbApiBase & uriPath ⊧ (◇ [tt_pp, [pathPiece|images|]])
+          maybeImageResponse ← fetchJson' imagesUrl
           case maybeImageResponse of
             𝓙 imageResponse → do
               let posterImages = filter (\ image → (imageType image) == "poster") (images imageResponse)
@@ -519,15 +572,15 @@ processTitle info_dir tt opts = do
             _ → liftIO $ putStrLn "Failed to fetch images"
 
           -- Fetch certificate
-          let certificateUrl = T.concat [imdbApiBase, tt, "/certificates"]
-          maybeCertificateResponse ← fetchJson certificateUrl
+          let certificate_url = imdbApiBase & uriPath ⊧ (◇ [tt_pp, [pathPiece|certificates|]])
+          maybeCertificateResponse ← fetchJson' certificate_url
           let ukCertificate = case maybeCertificateResponse of
                 𝓙 certificateResponse →
                   Maybe.listToMaybe $ map rating $ filter (\ certificate → code (country certificate) == "GB") (certificates certificateResponse)
                 𝓝 → 𝓝
 
           -- XXX writeMarkdownFile to not take a string for a filename
-          writeMarkdownFile tt (toText sanitized_title) ukCertificate titleResponse (toString target_path)
+          writeMarkdownFile (toText tt) (toText sanitized_title) ukCertificate titleResponse (toString target_path)
 
           -- Update people files
           Monad.forM_ (people opts) $ \ p → do
@@ -561,7 +614,7 @@ doMain doMock opts = do
     moviesDirExists ← liftIO $ Dir.doesDirectoryExist "movies"
     if not moviesDirExists
       then throwUserError @_ @𝕋 "run this in an obsidian movies-info dir"
-      else Monad.forM_ (tts opts) $ \ tt → ѥ (flip runReaderT doMock $ processTitle @UsageParseFPProcIOError cwd (toText tt) opts) ≫ \ case
+      else Monad.forM_ (tts opts) $ \ tt → ѥ (flip runReaderT doMock $ processTitle @UsageParseFPProcIOError cwd tt opts) ≫ \ case
                                       𝓛 e → liftIO $ Exit.exitFailure -- XXX REASON/error
                                       𝓡 r → return r
 
