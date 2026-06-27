@@ -1,6 +1,8 @@
 -- IMDB to Obsidian Haskell Script
 -- Uses ImageMagick (`magick`) for image resizing via command line
 
+-- XXX check last lines of seen file - if no newline; add one; if preceded by date, add an extra newline
+
 {-# LANGUAGE DataKinds         #-}
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE LambdaCase        #-}
@@ -14,7 +16,7 @@ module Main where
 import Base1
 
 -- putStrLn => log, or error?
-import Prelude  ( FilePath, Int, div, error, filter, map, mod, null, putStrLn )
+import Prelude  ( FilePath, Int, div, error, filter, map, mod, null, putStrLn, toEnum )
 
 import qualified Data.ByteString      as BSS
 import qualified Data.Text.IO         as TIO
@@ -32,32 +34,48 @@ import qualified Data.Aeson           as Aeson
 
 import Data.Aeson        ( FromJSON, ToJSON, (.:), (.:?), defaultOptions,fieldLabelModifier,
                            omitNothingFields, genericToJSON, withObject, withText )
-import Data.Aeson.Types  ( parseFail )
+import Data.Aeson.Types  ( Object, parseFail )
 
 -- base --------------------------------
 
-import Data.List     ( dropWhileEnd, nub )
+import Data.List     ( any, dropWhileEnd, nub, span )
 import GHC.Generics  ( Generic )
+import System.IO     ( Handle, SeekMode( AbsoluteSeek ), hFileSize, hSeek )
 import Text.Read     ( read )
 
 -- bytestring --------------------------
 
-import Data.ByteString  ( ByteString )
+import Data.ByteString  ( ByteString, hGet, uncons )
 
 -- data-textual ------------------------
 
 import Data.Textual  ( Textual( textual ) )
+
+-- exceptions --------------------------
+
+import Control.Monad.Catch  ( MonadCatch )
+
+-- extra -------------------------------
+
+import Data.List.Extra  ( takeWhileEnd )
 
 -- fpath -------------------------------
 
 import FPath.AbsDir            ( AbsDir )
 import FPath.AbsFile           ( AbsFile, absfile )
 import FPath.AppendableFPath   ( (⫻) )
+import FPath.Dirname           ( dirname )
+import FPath.Dir               ( DirAs )
 import FPath.Error.FPathError  ( AsFPathError )
+import FPath.File              ( FileAs )
 import FPath.FileLike          ( (⊙) )
 import FPath.Parseable         ( __parse__ )
 import FPath.PathComponent     ( PathComponent, pc )
 import FPath.RelDir            ( reldir )
+
+-- fstat -------------------------------
+
+import FStat  ( FileType( Directory ), ftype )
 
 -- lens --------------------------------
 
@@ -65,25 +83,25 @@ import Control.Lens.Getter  ( view )
 
 -- log-plus ----------------------------
 
-import Log  ( Log, infoT )
+import Log  ( Log, errT, infoT )
 
 -- logging-effect ----------------------
 
-import Control.Monad.Log  ( MonadLog, Severity( Informational ) )
-
--- mockio ------------------------------
-
-import MockIO.DoMock  ( HasDoMock( doMock ) )
+import Control.Monad.Log  ( MonadLog, Severity( Debug, Informational ) )
 
 -- mockio-log --------------------------
 
+import MockIO.IOClass      ( HasIOClass )
 import MockIO.MockIOClass  ( MockIOClass )
 
 -- mockio-plus -------------------------
 
-import MockIO.DoMock             ( DoMock )
-import MockIO.File               ( unlink )
-import MockIO.OpenFile           ( writeFile )
+import MockIO.Directory          ( mkdir )
+import MockIO.DoMock             ( DoMock( NoMock ), HasDoMock( doMock ) )
+import MockIO.File               ( FExists( FExists, NoFExists ), fexists, unlink )
+import MockIO.FStat              ( stat )
+import MockIO.OpenFile           ( FileOpenMode( FileR ), HEncoding( Binary ),
+                                   appendFile, readFile, withFile, writeFile )
 import MockIO.Process            ( ꙩ )
 import MockIO.Process.MLCmdSpec  ( ToMLCmdSpec )
 
@@ -95,8 +113,9 @@ import MonadError.IO.Error  ( throwUserError )
 -- monadio-plus ------------------------
 
 import MonadIO.Error.CreateProcError  ( AsCreateProcError )
-import MonadIO.FPath                  ( getCwd )
 import MonadIO.Error.ProcExitError    ( AsProcExitError )
+import MonadIO.FPath                  ( getCwd )
+import MonadIO.NamedHandle            ( HasNamedHandle, handle )
 
 -- mono-traversable --------------------
 
@@ -140,13 +159,17 @@ import StdMain  ( stdMainSimple )
 
 -- text --------------------------------
 
-import Data.Text                 ( breakOn, dropWhile )
-import Data.Text.Encoding        ( decodeUtf8With )
+import Data.Text                 ( breakOn, dropWhile, isInfixOf, isPrefixOf, unlines )
+import Data.Text.Encoding        ( decodeUtf8With, encodeUtf8 )
 import Data.Text.Encoding.Error  ( lenientDecode )
 
 -- text-printer ------------------------
 
 import qualified  Text.Printer  as  P
+
+-- yaml --------------------------------
+
+import Data.Yaml  ( decodeEither' )
 
 --------------------------------------------------------------------------------
 
@@ -318,6 +341,11 @@ personName Mum    = "Mum"
 
 --------------------
 
+personComponent ∷ Person → PathComponent
+personComponent = __parse__ ∘ personName
+
+--------------------
+
 -- | Get the prefix for a person
 personPrefix ∷ Person → 𝕋
 personPrefix Abi    = "ax"
@@ -384,6 +412,25 @@ parseOptions =
                                           , help "has seen" ])))
 
 ------------------------------------------------------------
+
+{-| things we can append to a URI -}
+class UAppend α where
+  uAppend ∷ MyURI → α → MyURI
+  (‡) ∷ MyURI → α → MyURI
+  (‡) = uAppend
+
+instance UAppend [RText 'PathPiece] where
+  uAppend uri_ pieces = uri_ & (myURI ∘ uriPath) ⊧ (◇ pieces)
+
+instance UAppend (RText 'PathPiece) where
+  uAppend uri_ piece = uAppend uri_ [piece]
+
+------------------------------------------------------------
+
+fromPC ∷ (Element α ~ PathComponent, FromSeqNonEmpty α) => PathComponent → α
+fromPC = fromSeqNE ∘ pure
+
+----------------------------------------
 
 -- | IMDB API base URL
 imdbApiBase ∷ MyURI
@@ -498,36 +545,19 @@ writeMarkdownFile tt sanitizedTitle ukCert titleResponse targetPath = do
 
 ----------------------------------------
 
-fromPC ∷ (Element α ~ PathComponent, FromSeqNonEmpty α) => PathComponent → α
-fromPC = fromSeqNE ∘ pure
-
-{-| things we can append to a URI -}
-class UAppend α where
-  uAppend ∷ MyURI → α → MyURI
-  (‡) ∷ MyURI → α → MyURI
-  (‡) = uAppend
-
-instance UAppend [RText 'PathPiece] where
-  uAppend uri_ pieces = uri_ & (myURI ∘ uriPath) ⊧ (◇ pieces)
-
-instance UAppend (RText 'PathPiece) where
-  uAppend uri_ piece = uAppend uri_ [piece]
-
 -- | Process a single title
 -- processTitle ∷ 𝕋 → Options → IO ()
 processTitle ∷ ∀ ε ρ μ .
-               (MonadIO μ, MonadLog (Log MockIOClass) μ,
+               (MonadIO μ, MonadLog (Log MockIOClass) μ, MonadCatch μ,
                 HasDoMock ρ, MonadReader ρ μ,
                 AsFPathError ε, AsIOError ε, AsCreateProcError ε, AsProcExitError ε, Printable ε, MonadError ε μ) =>
                AbsDir → Options → IMDB_ID → μ ()
 processTitle info_dir opts tt = do
-  let title_uri = imdbApiBase ‡ ҩ tt -- imdbApiBase & (myURI ∘ uriPath) ⊧ (◇ [toPathPiece tt])
+  let title_uri = imdbApiBase ‡ ҩ tt
   infoT $ [fmt|trying uri: %T|] title_uri
---  liftIO $ putStrLn $ "trying url: " ◇ renderStr title_uri
-  -- XXX this should fail with, e.g., https://api.imdbapi.dev/titles/tt107206
   maybeTitleResponse ← fetchJson title_uri
   case maybeTitleResponse of
-    𝓝 → liftIO $ putStrLn $ "Failed to fetch title: " ◇ toString tt
+    𝓝 → errT $ [fmt|Failed to fetch title: %T|] tt
     𝓙 titleResponse → do
       let sanitized_title   = titleFilename (primaryTitle titleResponse) (startYear titleResponse)
           movies_dir        = info_dir ⫻ [reldir|movies/|]
@@ -539,9 +569,9 @@ processTitle info_dir opts tt = do
           attachment_dir    = movies_dir ⫻ [reldir|_attachments/|]
           image_target_path = attachment_dir ⫻ jpg_fname
           tt_pp             = toPathPiece tt
+      infoT $ [fmt|Fetched title: %T|] tt
       -- check if the file already exists
-      liftIO $ putStrLn $ "Fetched title: " ◇ toString tt
-          -- XXX use something better than Dir, e.g., MockIO
+         -- XXX use something better than Dir, e.g., MockIO
       exists ← liftIO $ Dir.doesFileExist (toString target_path)
       if exists
         then liftIO $ putStrLn $ "Already exists: " ◇ toString target_path ◇ " (" ◇ toString tt ◇ ")"
@@ -579,6 +609,9 @@ processTitle info_dir opts tt = do
           -- XXX writeMarkdownFile to not take a string for a filename
           writeMarkdownFile (toText tt) (toText sanitized_title) ukCertificate titleResponse (toString target_path)
 
+          let people_dir      = info_dir ⫻ [reldir|people/|]
+              person_dir p    = people_dir ⫻ fromList [personComponent p]
+              person_fn  p bf = person_dir p ⫻ (__parse__ $ bf (personPrefix p))
           -- Update people files
           Monad.forM_ (people opts) $ \ p → do
             let pp = T.unpack (personPrefix p)
@@ -588,21 +621,128 @@ processTitle info_dir opts tt = do
             liftIO $ TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
 
           Monad.forM_ (seen opts) $ \ p → do
-            let pp = T.unpack (personPrefix p)
-                personDir = FP.combine "people" (T.unpack (personName p))
-            liftIO $ Dir.createDirectoryIfMissing 𝓣 personDir
-            let personFilePath = FP.combine personDir $ pp ◇ "-has-seen.md"
-            liftIO $ TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
+            ensureDir (person_dir p)
+            let person_file_name = person_fn p [fmtT|%t-has-seen.md|]
+            ensureInternalLink person_file_name (primaryTitle titleResponse)
 
+----------------------------------------
+
+readLastByte ∷ Handle → IO (𝕄 Word8)
+readLastByte h = do
+  size ← hFileSize h
+  if size ≤ 0
+  then return 𝓝
+  else do hSeek h AbsoluteSeek (size - 1)
+          bs ← hGet h 1
+          return $ fst ⊳ uncons bs
+
+--------------------
+
+readLastByte' ∷ ∀ ε δ μ . (MonadIO μ, HasNamedHandle δ, AsIOError ε, MonadError ε μ) =>
+                δ → μ (𝕄 ℂ)
+readLastByte' h = asIOError $ (toEnum ∘ fromIntegral) ⊳⊳ readLastByte (h ⊣ handle)
+
+--------------------
+
+getLastByte ∷ ∀ ε γ ω μ . (MonadIO μ, FileAs γ, AsIOError ε, MonadError ε μ, Printable ε,
+                           HasDoMock ω, HasIOClass ω, Default ω, MonadLog (Log ω) μ) =>
+              γ → μ (𝕄 ℂ)
+getLastByte fn = withFile Informational 𝓝 Binary FileR (return 𝓝) fn readLastByte' NoMock
+
+----------------------------------------
+
+{-| Ensure that a file ends in a newline, *if it exists and is a file*.
+    If it doesn't exist: do nothing.
+    If it exists, but is empty: do nothing.
+    If it is not a file (or appending does not work): error.
+-}
+ensureTrailingNewline ∷ ∀ ε γ ρ ω μ .
+                        (MonadIO μ, FileAs γ, AsIOError ε, Printable ε, MonadError ε μ,
+                         HasDoMock ρ, MonadReader ρ μ,
+                         HasDoMock ω,HasIOClass ω,Default ω,MonadLog (Log ω) μ) =>
+                        γ → μ ()
+ensureTrailingNewline fn = do
+  do_mock ← asks (view doMock)
+  fexists Debug FExists fn NoMock ≫ \ case
+    NoFExists → return ()
+    FExists → getLastByte fn ≫ \ case
+      𝓝      → return ()
+      𝓙 '\n' → return ()
+      𝓙 _    → appendFile Informational 𝓝 𝓝 fn ("\n"∷𝕋) do_mock
+
+----------------------------------------
+
+{-| Parse a pandoc-markdown file, that is, a file with an optional set of YAML attributes
+    at the top.
+
+    If the file is prefixed with a "---" line, then the top is parsed as YAML, until any
+    latter "---" line.  The second "---", and any subsequent text, is returned as lines.(&&)
+
+    If the file is not prefixed with a "---" line, then it's all returned as lines.
+-}
+parseMd ∷ ∀ ε γ ω μ . (MonadIO μ, FileAs γ, AsIOError ε, Printable ε, MonadError ε μ,
+                       HasDoMock ω, HasIOClass ω, Default ω, MonadLog (Log ω) μ) =>
+          γ → μ (𝕄 Object, [𝕋])
+parseMd fn = do
+  readFile Informational 𝓝 (return []) fn NoMock ≫ \ case
+    ("---" : xs) → let (header, rest) = span (≢ "---") xs
+                   in  case decodeEither' @Object (encodeUtf8 $ unlines header) of
+                         𝓡 o → return (𝓙 o,rest)
+                         𝓛 e → throwUserError $
+                                 [fmtT|failed to decode header in %T (%w)|] fn e
+    xs           → return (𝓝, xs)
+
+----------------------------------------
+
+{-| A bit like `mkpath`, but only one level.  Ensure that a given directory exists,
+    creating it if necessary (but not creating parents). -}
+ensureDir ∷ ∀ ε δ ρ ω μ . (MonadIO μ, DirAs δ, AsIOError ε, Printable ε, MonadError ε μ,
+                           HasDoMock ρ, MonadReader ρ μ,
+                           MonadLog (Log ω) μ, Default ω, HasIOClass ω, HasDoMock ω) =>
+            δ → μ ()
+ensureDir d = do
+  do_mock ← asks (view doMock)
+  ftype ⊳⊳ (stat Informational 𝓝 d NoMock) ≫ \ case
+    𝓝           → mkdir Informational d 0o755 do_mock
+    𝓙 Directory → return ()
+    𝓙 ft        → throwUserError ([fmtT|not a directory: %T (got a %w)|] d ft)
+
+----------------------------------------
+
+appendText ∷ ∀ ε ρ ω μ . (MonadIO μ, AsIOError ε, Printable ε, MonadError ε μ,
+                          HasDoMock ρ, MonadReader ρ μ,
+                          Default ω,HasDoMock ω,HasIOClass ω, MonadLog (Log ω) μ) =>
+             AbsFile → 𝕋 → μ ()
+appendText file_name text =
+  asks (view doMock) ≫ appendFile Informational 𝓝 (𝓙 0o644) file_name text
+
+----------------------------------------
+
+{-| Ensure that a given wiki link is present in a file, adding it at the end if necessary
+    (see `appendInternalLink`); creating the file if it doesn't exist. -}
+ensureInternalLink ∷ ∀ ε ρ ω μ . (MonadIO μ, AsIOError ε, Printable ε, MonadError ε μ,
+                                  HasDoMock ρ, MonadReader ρ μ,
+                                  Default ω,HasDoMock ω,HasIOClass ω, MonadLog (Log ω) μ) =>
+                     AbsFile → 𝕋 → μ ()
+ensureInternalLink fn link_text = do
+  ensureDir (fn ⊣ dirname)
+  (_, lines) ← parseMd fn
+  let text = [fmtT|[[%t]]|] link_text
+  case filter (text `isInfixOf`) lines of
+    (_:_) → return ()
+    []    → do
+      let last_para = takeWhileEnd (≢"") lines
+      ensureTrailingNewline fn
+      when (any ("#" `isPrefixOf`) last_para) $ appendText fn "\n"
+      appendText fn $ text ◇ "\n"
 
 ----------------------------------------
 
 doMain ∷ ∀ ε μ .
-         (MonadIO μ, MonadLog (Log MockIOClass) μ,
+         (MonadIO μ, MonadLog (Log MockIOClass) μ, MonadCatch μ,
           AsIOError ε, AsFPathError ε, AsCreateProcError ε, AsProcExitError ε, Printable ε,
           MonadError ε μ) =>
          DoMock → Options → μ ()
--- XXX DoMock; percolate it through
 doMain do_mock opts = do
   cwd ← getCwd
   if null (tts opts)
