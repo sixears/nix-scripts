@@ -156,8 +156,7 @@ import StdMain  ( stdMainSimple )
 -- text --------------------------------
 
 import Data.Text                 ( breakOn, dropWhile, isInfixOf, isPrefixOf, unlines )
-import Data.Text.Encoding        ( decodeUtf8With, encodeUtf8 )
-import Data.Text.Encoding.Error  ( lenientDecode )
+import Data.Text.Encoding        ( encodeUtf8 )
 
 -- text-printer ------------------------
 
@@ -272,9 +271,16 @@ instance FromJSON Image where
 
 ------------------------------------------------------------
 
+newtype MDInternalLink = MDInternalLink { unMDInternalLink ∷ PathComponent }
+
+instance ToJSON MDInternalLink where
+  toJSON = Aeson.String ⊳ mdInternalLink ∘ unMDInternalLink
+
+------------------------------------------------------------
+
 data FrontMatter = FrontMatter { imdb          ∷ 𝕋
                                , title         ∷ 𝕋
-                               , cover         ∷ 𝕋
+                               , cover         ∷ MDInternalLink
                                , ukCertificate ∷ 𝕋
                                , summary       ∷ 𝕋
                                , year          ∷ 𝕋
@@ -541,21 +547,20 @@ mdInternalLink = [fmt|[[%T]]|]
 writeMovie ∷ ∀ ε ρ μ .
              (MonadIO μ, MonadLog (Log MockIOClass) μ, MonadCatch μ,
               HasDoMock ρ, MonadReader ρ μ, AsIOError ε, Printable ε, MonadError ε μ) =>
-             𝕋 → 𝕋 → 𝕄 𝕋 → TitleResponse → AbsFile → μ ()
-writeMovie tt sanitizedTitle ukCert titleResponse fn = do
-  do_mock ← asks (view doMock)
+             𝕋 → PathComponent → 𝕄 𝕋 → TitleResponse → AbsFile → μ ()
+writeMovie tt sanitized_title uk_cert title_response fn = do
   let fm = FrontMatter
         { imdb          = tt
-        , title         = primaryTitle titleResponse
+        , title         = primaryTitle title_response
         -- XXX create internal link function (taking optional file extension)
-        , cover         = T.concat ["[[", sanitizedTitle, ".jpg]]"]
-        , ukCertificate = "N/A" ⧐ ukCert
-        , summary       = ""    ⧐ plot titleResponse
-        , year          = maybe "N/A" (T.pack . show) (startYear titleResponse)
-        , duration      = formatDuration (runtimeSeconds titleResponse)
-        , interests'    = map interestName ⊳ interests titleResponse
-        , stars'        = map displayName  ⊳ stars     titleResponse
-        , directors'    = map displayName  ⊳ directors titleResponse
+        , cover         = MDInternalLink $ sanitized_title ⊙ [pc|jpg|]
+        , ukCertificate = "N/A" ⧐ uk_cert
+        , summary       = ""    ⧐ plot title_response
+        , year          = maybe "N/A" (T.pack . show) (startYear title_response)
+        , duration      = formatDuration (runtimeSeconds title_response)
+        , interests'    = map interestName ⊳ interests title_response
+        , stars'        = map displayName  ⊳ stars     title_response
+        , directors'    = map displayName  ⊳ directors title_response
         }
 
   writeMD (𝓙 fm) [] fn
@@ -662,7 +667,7 @@ ensureInternalLink ∷ ∀ ε ρ ω μ . (MonadIO μ, AsIOError ε, Printable ε
 ensureInternalLink link fn = do
   ensureDir (fn ⊣ dirname)
   (_, lines) ← parseMD fn
-  let text = [fmtT|[[%T]]|] link
+  let text = mdInternalLink link
   case filter (text `isInfixOf`) lines of
     (_:_) → return ()
     []    → do
@@ -733,14 +738,11 @@ processTitle info_dir opts tt = do
                   Maybe.listToMaybe $ map rating $ filter (\ certificate → code (country certificate) == "GB") (certificates certificateResponse)
                 𝓝 → 𝓝
 
-          writeMovie (toText tt) (toText sanitized_title) ukCertificate titleResponse target_path
+          writeMovie (toText tt) sanitized_title ukCertificate titleResponse target_path
 
           let people_dir     = info_dir ⫻ [reldir|people/|]
               person_dir p   = people_dir ⫻ fromList [personComponent p]
               person_fn bf p = person_dir p ⫻ (__parse__ $ bf (personPrefix p))
-              -- we need to sanitize with titleFilename here, because it's used to make
-              -- links, and they are references to filenames
-              -- title          = titleFilename $ primaryTitle titleResponse
 
           forM_ (people opts) $
             ensureInternalLink sanitized_title ∘ person_fn [fmtT|%t-wants-to-see.md|]
