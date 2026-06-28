@@ -278,7 +278,7 @@ instance ToJSON MDInternalLink where
 
 ------------------------------------------------------------
 
-data FrontMatter = FrontMatter { imdb          ∷ 𝕋
+data FrontMatter = FrontMatter { imdb          ∷ IMDB_ID
                                , title         ∷ 𝕋
                                , cover         ∷ MDInternalLink
                                , ukCertificate ∷ 𝕋
@@ -385,6 +385,11 @@ data IMDB_ID = IMDB_ID ℕ  deriving  Show
 
 instance Printable IMDB_ID where
   print (IMDB_ID i) = P.text $ [fmt|tt%07d|] i
+
+--------------------
+
+instance ToJSON IMDB_ID where
+  toJSON = Aeson.String ∘ toText
 
 --------------------
 
@@ -547,12 +552,11 @@ mdInternalLink = [fmt|[[%T]]|]
 writeMovie ∷ ∀ ε ρ μ .
              (MonadIO μ, MonadLog (Log MockIOClass) μ, MonadCatch μ,
               HasDoMock ρ, MonadReader ρ μ, AsIOError ε, Printable ε, MonadError ε μ) =>
-             𝕋 → PathComponent → 𝕄 𝕋 → TitleResponse → AbsFile → μ ()
+             IMDB_ID → PathComponent → 𝕄 𝕋 → TitleResponse → AbsFile → μ ()
 writeMovie tt sanitized_title uk_cert title_response fn = do
   let fm = FrontMatter
         { imdb          = tt
         , title         = primaryTitle title_response
-        -- XXX create internal link function (taking optional file extension)
         , cover         = MDInternalLink $ sanitized_title ⊙ [pc|jpg|]
         , ukCertificate = "N/A" ⧐ uk_cert
         , summary       = ""    ⧐ plot title_response
@@ -738,7 +742,7 @@ processTitle info_dir opts tt = do
                   Maybe.listToMaybe $ map rating $ filter (\ certificate → code (country certificate) == "GB") (certificates certificateResponse)
                 𝓝 → 𝓝
 
-          writeMovie (toText tt) sanitized_title ukCertificate titleResponse target_path
+          writeMovie tt sanitized_title ukCertificate titleResponse target_path
 
           let people_dir     = info_dir ⫻ [reldir|people/|]
               person_dir p   = people_dir ⫻ fromList [personComponent p]
