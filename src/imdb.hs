@@ -1,8 +1,6 @@
 -- IMDB to Obsidian Haskell Script
 -- Uses ImageMagick (`magick`) for image resizing via command line
 
--- XXX check last lines of seen file - if no newline; add one; if preceded by date, add an extra newline
-
 {-# LANGUAGE DataKinds         #-}
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE LambdaCase        #-}
@@ -16,13 +14,11 @@ module Main where
 import Base1
 
 -- putStrLn => log, or error?
-import Prelude  ( FilePath, Int, div, error, filter, map, mod, null, putStrLn, toEnum )
+import Prelude  ( Int, div, error, filter, map, mod, null, putStrLn, toEnum )
 
 import qualified Data.ByteString      as BSS
-import qualified Data.Text.IO         as TIO
 import qualified Network.HTTP.Simple  as HTTP
 import qualified System.Directory     as Dir
-import qualified System.FilePath      as FP
 import qualified Data.Maybe           as Maybe
 import qualified Control.Monad        as Monad
 import qualified Data.Yaml            as Yaml
@@ -169,7 +165,7 @@ import qualified  Text.Printer  as  P
 
 -- yaml --------------------------------
 
-import Data.Yaml  ( decodeEither' )
+import Data.Yaml  ( decodeEither', encode )
 
 --------------------------------------------------------------------------------
 
@@ -292,6 +288,9 @@ data FrontMatter = FrontMatter { imdb          ∷ 𝕋
 instance ToJSON FrontMatter where
   toJSON = genericToJSON defaultOptions { fieldLabelModifier = dropWhileEnd (≡'\'')
                                         , omitNothingFields = 𝓣 }
+
+instance Printable FrontMatter where
+  print = P.utf8 ∘ encode
 
 ------------------------------------------------------------
 
@@ -473,7 +472,7 @@ titleFilename title year =
                ("A",   rest) → dropWhile (≡' ') rest ◇ "," ◇ "A"
                ("An",  rest) → dropWhile (≡' ') rest ◇ "," ◇ "An"
                (ini,   rest) → ini ◇ rest
-      year_text = "" ⧐ ([fmt|  [%d]|] ⊳ year)
+      year_text = "" ⧐ ([fmt|  (%d)|] ⊳ year)
   in  __parse__ $ name ◇ year_text
 
 ----------------------------------------
@@ -488,6 +487,7 @@ formatDuration 𝓝 = "N/A"
 
 ----------------------------------------
 
+{-| execute an external process, don't redirect out/err, nothing on stdin, expect 0 exit -}
 ꙭ ∷ ∀ ε δ α μ . (MonadIO μ, ToMLCmdSpec α (), MonadLog (Log MockIOClass) μ,
                  MonadReader δ μ, HasDoMock δ,
                  AsIOError ε, AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
@@ -523,11 +523,31 @@ downloadAndResizeImage image_uri target_path = do
 
 ----------------------------------------
 
-writeMarkdownFile ∷ MonadIO μ => 𝕋 → 𝕋 → 𝕄 𝕋 → TitleResponse → FilePath → μ ()
-writeMarkdownFile tt sanitizedTitle ukCert titleResponse targetPath = do
+writeMD ∷ ∀ ε α ρ μ .
+          (MonadIO μ, Printable α, MonadLog (Log MockIOClass) μ, MonadCatch μ,
+           HasDoMock ρ, MonadReader ρ μ, AsIOError ε, Printable ε, MonadError ε μ) =>
+          𝕄 α → [𝕋] → AbsFile → μ ()
+writeMD yaml_m lines fn =
+  let content = maybe "" [fmtT|---\n%T---\n|] yaml_m ◇ unlines lines
+  in  asks (view doMock) ≫ writeFile Informational 𝓝 (𝓙 0o644) fn content
+
+----------------------------------------
+
+mdInternalLink ∷ PathComponent → 𝕋
+mdInternalLink = [fmt|[[%T]]|]
+
+----------------------------------------
+
+writeMovie ∷ ∀ ε ρ μ .
+             (MonadIO μ, MonadLog (Log MockIOClass) μ, MonadCatch μ,
+              HasDoMock ρ, MonadReader ρ μ, AsIOError ε, Printable ε, MonadError ε μ) =>
+             𝕋 → 𝕋 → 𝕄 𝕋 → TitleResponse → AbsFile → μ ()
+writeMovie tt sanitizedTitle ukCert titleResponse fn = do
+  do_mock ← asks (view doMock)
   let fm = FrontMatter
         { imdb          = tt
         , title         = primaryTitle titleResponse
+        -- XXX create internal link function (taking optional file extension)
         , cover         = T.concat ["[[", sanitizedTitle, ".jpg]]"]
         , ukCertificate = "N/A" ⧐ ukCert
         , summary       = ""    ⧐ plot titleResponse
@@ -538,92 +558,7 @@ writeMarkdownFile tt sanitizedTitle ukCert titleResponse targetPath = do
         , directors'    = map displayName  ⊳ directors titleResponse
         }
 
-      yamlContent = "---\n" ◇ decodeUtf8With lenientDecode (Yaml.encode fm) ◇ "---\n"
-
-  liftIO $ TIO.writeFile targetPath yamlContent
-
-
-----------------------------------------
-
--- | Process a single title
--- processTitle ∷ 𝕋 → Options → IO ()
-processTitle ∷ ∀ ε ρ μ .
-               (MonadIO μ, MonadLog (Log MockIOClass) μ, MonadCatch μ,
-                HasDoMock ρ, MonadReader ρ μ,
-                AsFPathError ε, AsIOError ε, AsCreateProcError ε, AsProcExitError ε, Printable ε, MonadError ε μ) =>
-               AbsDir → Options → IMDB_ID → μ ()
-processTitle info_dir opts tt = do
-  let title_uri = imdbApiBase ‡ ҩ tt
-  infoT $ [fmt|trying uri: %T|] title_uri
-  maybeTitleResponse ← fetchJson title_uri
-  case maybeTitleResponse of
-    𝓝 → errT $ [fmt|Failed to fetch title: %T|] tt
-    𝓙 titleResponse → do
-      let sanitized_title   = titleFilename (primaryTitle titleResponse) (startYear titleResponse)
-          movies_dir        = info_dir ⫻ [reldir|movies/|]
-          md_fname          = fromPC (sanitized_title ⊙ [pc|md|])
-          jpg_fname         = fromPC (sanitized_title ⊙ [pc|jpg|])
-          -- XXX lose typesig?
-          target_path       ∷ AbsFile
-          target_path       = movies_dir ⫻ md_fname
-          attachment_dir    = movies_dir ⫻ [reldir|_attachments/|]
-          image_target_path = attachment_dir ⫻ jpg_fname
-          tt_pp             = toPathPiece tt
-      infoT $ [fmt|Fetched title: %T|] tt
-      -- check if the file already exists
-         -- XXX use something better than Dir, e.g., MockIO
-      exists ← liftIO $ Dir.doesFileExist (toString target_path)
-      if exists
-        then liftIO $ putStrLn $ "Already exists: " ◇ toString target_path ◇ " (" ◇ toString tt ◇ ")"
-        else do
-          liftIO $ putStrLn $ "Found title: " ◇ T.unpack (primaryTitle titleResponse)
-
-          -- Create attachments directory if it doesn't exist
-          -- XXX use something better than Dir, e.g., MockIO
-          liftIO $ Dir.createDirectoryIfMissing 𝓣 (toString attachment_dir)
-
-          -- Fetch and process images
-          let imagesUrl = imdbApiBase ‡ [tt_pp, [pathPiece|images|]] -- imdbApiBase & uriPath ⊧ (◇ [tt_pp, [pathPiece|images|]])
-          maybeImageResponse ← fetchJson imagesUrl
-          case maybeImageResponse of
-            𝓙 imageResponse → do
-              let posterImages = filter (\ image → (imageType image) == "poster") (images imageResponse)
-              if null posterImages
-                then liftIO $ putStrLn "No images found"
-                else do
-                  liftIO $ putStrLn $ "Writing " ◇ (toString image_target_path) ◇ "..."
-                  case head posterImages of
-                    𝓝    → liftIO $ putStrLn "no image found"
-                    𝓙 pI → downloadAndResizeImage (url pI) image_target_path
-            _ → liftIO $ putStrLn "Failed to fetch images"
-
-          -- Fetch certificate
---          let certificate_url = imdbApiBase & uriPath ⊧ (◇ [tt_pp, [pathPiece|certificates|]])
-          let certificate_url = imdbApiBase ‡ [tt_pp, [pathPiece|certificates|]]
-          maybeCertificateResponse ← fetchJson certificate_url
-          let ukCertificate = case maybeCertificateResponse of
-                𝓙 certificateResponse →
-                  Maybe.listToMaybe $ map rating $ filter (\ certificate → code (country certificate) == "GB") (certificates certificateResponse)
-                𝓝 → 𝓝
-
-          -- XXX writeMarkdownFile to not take a string for a filename
-          writeMarkdownFile (toText tt) (toText sanitized_title) ukCertificate titleResponse (toString target_path)
-
-          let people_dir      = info_dir ⫻ [reldir|people/|]
-              person_dir p    = people_dir ⫻ fromList [personComponent p]
-              person_fn  p bf = person_dir p ⫻ (__parse__ $ bf (personPrefix p))
-          -- Update people files
-          Monad.forM_ (people opts) $ \ p → do
-            let pp = T.unpack (personPrefix p)
-                personDir = FP.combine "people" (T.unpack (personName p))
-            liftIO $ Dir.createDirectoryIfMissing 𝓣 personDir
-            let personFilePath = FP.combine personDir $ pp ◇ "-wants-to-see.md"
-            liftIO $ TIO.appendFile personFilePath $ T.concat ["[[", (primaryTitle titleResponse), "]]\n"]
-
-          Monad.forM_ (seen opts) $ \ p → do
-            ensureDir (person_dir p)
-            let person_file_name = person_fn p [fmtT|%t-has-seen.md|]
-            ensureInternalLink person_file_name (primaryTitle titleResponse)
+  writeMD (𝓙 fm) [] fn
 
 ----------------------------------------
 
@@ -680,10 +615,10 @@ ensureTrailingNewline fn = do
 
     If the file is not prefixed with a "---" line, then it's all returned as lines.
 -}
-parseMd ∷ ∀ ε γ ω μ . (MonadIO μ, FileAs γ, AsIOError ε, Printable ε, MonadError ε μ,
+parseMD ∷ ∀ ε γ ω μ . (MonadIO μ, FileAs γ, AsIOError ε, Printable ε, MonadError ε μ,
                        HasDoMock ω, HasIOClass ω, Default ω, MonadLog (Log ω) μ) =>
           γ → μ (𝕄 Object, [𝕋])
-parseMd fn = do
+parseMD fn = do
   readFile Informational 𝓝 (return []) fn NoMock ≫ \ case
     ("---" : xs) → let (header, rest) = span (≢ "---") xs
                    in  case decodeEither' @Object (encodeUtf8 $ unlines header) of
@@ -723,11 +658,11 @@ appendText file_name text =
 ensureInternalLink ∷ ∀ ε ρ ω μ . (MonadIO μ, AsIOError ε, Printable ε, MonadError ε μ,
                                   HasDoMock ρ, MonadReader ρ μ,
                                   Default ω,HasDoMock ω,HasIOClass ω, MonadLog (Log ω) μ) =>
-                     AbsFile → 𝕋 → μ ()
-ensureInternalLink fn link_text = do
+                     PathComponent → AbsFile → μ ()
+ensureInternalLink link fn = do
   ensureDir (fn ⊣ dirname)
-  (_, lines) ← parseMd fn
-  let text = [fmtT|[[%t]]|] link_text
+  (_, lines) ← parseMD fn
+  let text = [fmtT|[[%T]]|] link
   case filter (text `isInfixOf`) lines of
     (_:_) → return ()
     []    → do
@@ -735,6 +670,83 @@ ensureInternalLink fn link_text = do
       ensureTrailingNewline fn
       when (any ("#" `isPrefixOf`) last_para) $ appendText fn "\n"
       appendText fn $ text ◇ "\n"
+
+----------------------------------------
+
+-- | Process a single title
+-- processTitle ∷ 𝕋 → Options → IO ()
+processTitle ∷ ∀ ε ρ μ .
+               (MonadIO μ, MonadLog (Log MockIOClass) μ, MonadCatch μ,
+                HasDoMock ρ, MonadReader ρ μ,
+                AsFPathError ε, AsIOError ε, AsCreateProcError ε, AsProcExitError ε, Printable ε, MonadError ε μ) =>
+               AbsDir → Options → IMDB_ID → μ ()
+processTitle info_dir opts tt = do
+  let title_uri = imdbApiBase ‡ ҩ tt
+  infoT $ [fmt|trying uri: %T|] title_uri
+  maybeTitleResponse ← fetchJson title_uri
+  case maybeTitleResponse of
+    𝓝 → errT $ [fmt|Failed to fetch title: %T|] tt
+    𝓙 titleResponse → do
+      let sanitized_title   = titleFilename (primaryTitle titleResponse) (startYear titleResponse)
+          movies_dir        = info_dir ⫻ [reldir|movies/|]
+          md_fname          = fromPC (sanitized_title ⊙ [pc|md|])
+          jpg_fname         = fromPC (sanitized_title ⊙ [pc|jpg|])
+          -- XXX lose typesig?
+          target_path       ∷ AbsFile
+          target_path       = movies_dir ⫻ md_fname
+          attachment_dir    = movies_dir ⫻ [reldir|_attachments/|]
+          image_target_path = attachment_dir ⫻ jpg_fname
+          tt_pp             = toPathPiece tt
+      infoT $ [fmt|Fetched title: %T|] tt
+      -- check if the file already exists
+         -- XXX use something better than Dir, e.g., MockIO
+      exists ← liftIO $ Dir.doesFileExist (toString target_path)
+      if exists
+        then liftIO $ putStrLn $ "Already exists: " ◇ toString target_path ◇ " (" ◇ toString tt ◇ ")"
+        else do
+          liftIO $ putStrLn $ "Found title: " ◇ T.unpack (primaryTitle titleResponse)
+
+          -- Create attachments directory if it doesn't exist
+          -- XXX use something better than Dir, e.g., MockIO
+          liftIO $ Dir.createDirectoryIfMissing 𝓣 (toString attachment_dir)
+
+          -- Fetch and process images
+          let imagesUrl = imdbApiBase ‡ [tt_pp, [pathPiece|images|]]
+          maybeImageResponse ← fetchJson imagesUrl
+          case maybeImageResponse of
+            𝓙 imageResponse → do
+              let posterImages = filter (\ image → (imageType image) == "poster") (images imageResponse)
+              if null posterImages
+                then liftIO $ putStrLn "No images found"
+                else do
+                  liftIO $ putStrLn $ "Writing " ◇ (toString image_target_path) ◇ "..."
+                  case head posterImages of
+                    𝓝    → liftIO $ putStrLn "no image found"
+                    𝓙 pI → downloadAndResizeImage (url pI) image_target_path
+            _ → liftIO $ putStrLn "Failed to fetch images"
+
+          -- Fetch certificate
+          let certificate_url = imdbApiBase ‡ [tt_pp, [pathPiece|certificates|]]
+          maybeCertificateResponse ← fetchJson certificate_url
+          let ukCertificate = case maybeCertificateResponse of
+                𝓙 certificateResponse →
+                  Maybe.listToMaybe $ map rating $ filter (\ certificate → code (country certificate) == "GB") (certificates certificateResponse)
+                𝓝 → 𝓝
+
+          writeMovie (toText tt) (toText sanitized_title) ukCertificate titleResponse target_path
+
+          let people_dir     = info_dir ⫻ [reldir|people/|]
+              person_dir p   = people_dir ⫻ fromList [personComponent p]
+              person_fn bf p = person_dir p ⫻ (__parse__ $ bf (personPrefix p))
+              -- we need to sanitize with titleFilename here, because it's used to make
+              -- links, and they are references to filenames
+              -- title          = titleFilename $ primaryTitle titleResponse
+
+          forM_ (people opts) $
+            ensureInternalLink sanitized_title ∘ person_fn [fmtT|%t-wants-to-see.md|]
+
+          forM_ (seen opts) $
+            ensureInternalLink sanitized_title ∘ person_fn [fmtT|%t-has-seen.md|]
 
 ----------------------------------------
 
