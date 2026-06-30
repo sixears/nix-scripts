@@ -14,7 +14,7 @@ module Main where
 import Base1
 
 -- putStrLn => log, or error?
-import Prelude  ( Double, Int,
+import Prelude  ( Double,
                   div, error, filter, map, mod, null, putStrLn, toEnum, truncate )
 
 import qualified Data.ByteString      as BSS
@@ -40,7 +40,7 @@ import Data.Aeson.Types  ( Object, parseFail )
 import Data.List     ( any, dropWhileEnd, nub, span )
 import GHC.Generics  ( Generic )
 import System.IO     ( Handle, SeekMode( AbsoluteSeek ), hFileSize, hSeek )
-import Text.Read     ( read, readEither )
+import Text.Read     ( read )
 
 -- bytestring --------------------------
 
@@ -190,13 +190,15 @@ instance ToJSON Year where toJSON = Aeson.String ∘ toText
 
 instance FromJSON Year where
   parseJSON = withScientific "Year" $ \ s →
-    let y ∷ Word16 = truncate s
-    in if y < 1900
+    if isInteger s
+    then let y ∷ Word16 = truncate s
+         in if y < 1900
        -- XXX have fmt handle Scientifics
-       then parseFail $ [fmt|year '%T' < 1900|] (toRealFloat @Double s)
-       else if y > 2155
-            then parseFail $ [fmt|year '%T' > 2155|] (toRealFloat @Double s)
-            else pure $ Year (fromIntegral $ y-1900)
+            then parseFail $ [fmt|year '%T' < 1900|] (toRealFloat @Double s)
+            else if y > 2155
+                 then parseFail $ [fmt|year '%T' > 2155|] (toRealFloat @Double s)
+                 else pure $ Year (fromIntegral $ y-1900)
+    else parseFail $ [fmt|year '%T' is not an integer|] (toRealFloat @Double s)
 
 ------------------------------------------------------------
 
@@ -204,11 +206,11 @@ instance FromJSON Year where
 
 data TitleResponse = TitleResponse { primaryTitle   ∷ 𝕋
                                    , startYear      ∷ 𝕄 Year
-                                   , runtimeSeconds ∷ 𝕄 Int
+                                   , runtimeSeconds ∷ 𝕄 Word16
                                    , plot           ∷ 𝕄 𝕋
                                    , interests      ∷ 𝕄 [Interest]
-                                   , stars          ∷ 𝕄 [Person']
-                                   , directors      ∷ 𝕄 [Person']
+                                   , stars          ∷ 𝕄 [IMDB_Person]
+                                   , directors      ∷ 𝕄 [IMDB_Person]
                                    }
   deriving Show
 
@@ -235,12 +237,12 @@ instance FromJSON Interest where
 
 ------------------------------------------------------------
 
-newtype Person' = Person' { displayName ∷ 𝕋 } deriving Show
+newtype IMDB_Person = IMDB_Person { displayName ∷ 𝕋 } deriving Show
 
 --------------------
 
-instance FromJSON Person' where
-  parseJSON = withObject "Person" $ \ v → Person' <$> v .: "displayName"
+instance FromJSON IMDB_Person where
+  parseJSON = withObject "Person" $ \ v → IMDB_Person <$> v .: "displayName"
 
 ------------------------------------------------------------
 
@@ -543,7 +545,7 @@ titleFilename title year =
 ----------------------------------------
 
 -- | Format duration from seconds
-formatDuration ∷ 𝕄 Int → 𝕋
+formatDuration ∷ 𝕄 Word16 → 𝕋
 formatDuration (𝓙 seconds) =
   let hours = seconds `div` 3600
       minutes = (seconds `mod` 3600) `div` 60
@@ -800,7 +802,7 @@ processTitle info_dir opts tt = do
 
           let people_dir     = info_dir ⫻ [reldir|people/|]
               person_dir p   = people_dir ⫻ fromList [personComponent p]
-              person_fn bf p = person_dir p ⫻ __parse__ $ bf (personPrefix p)
+              person_fn bf p = person_dir p ⫻ __parse__ (bf (personPrefix p))
 
           forM_ (people opts) $
             ensureInternalLink sanitized_title ∘ person_fn [fmtT|%t-wants-to-see.md|]
