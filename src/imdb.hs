@@ -226,7 +226,7 @@ instance FromJSON TitleResponse where
 
 ------------------------------------------------------------
 
-data Interest = Interest { interestName ∷ 𝕋 } deriving Show
+newtype Interest = Interest { interestName ∷ 𝕋 } deriving Show
 
 --------------------
 
@@ -235,7 +235,7 @@ instance FromJSON Interest where
 
 ------------------------------------------------------------
 
-data Person' = Person' { displayName ∷ 𝕋 } deriving Show
+newtype Person' = Person' { displayName ∷ 𝕋 } deriving Show
 
 --------------------
 
@@ -270,7 +270,7 @@ data Certificate = Certificate { country ∷ Country, rating ∷ Rating }
 
 --------------------
 
-data CertificateResponse = CertificateResponse { certificates ∷ [Certificate] }
+newtype CertificateResponse = CertificateResponse { certificates ∷ [Certificate] }
   deriving Show
 
 --------------------
@@ -287,7 +287,7 @@ instance FromJSON Certificate where
 
 ------------------------------------------------------------
 
-data Country = Country { code ∷ 𝕋 } deriving Show
+newtype Country = Country { code ∷ 𝕋 } deriving Show
 
 --------------------
 
@@ -296,7 +296,7 @@ instance FromJSON Country where
 
 ------------------------------------------------------------
 
-data ImageResponse = ImageResponse { images ∷ [Image] } deriving Show
+newtype ImageResponse = ImageResponse { images ∷ [Image] } deriving Show
 
 --------------------
 
@@ -433,7 +433,7 @@ instance ToPathPiece (RText 'PathPiece) where toPathPiece = id
 
 ------------------------------------------------------------
 
-data IMDB_ID = IMDB_ID ℕ  deriving  Show
+newtype IMDB_ID = IMDB_ID ℕ  deriving  Show
 
 --------------------
 
@@ -470,10 +470,10 @@ data Options = Options { tts :: [IMDB_ID], people :: [Person], seen :: [Person] 
 parseOptions ∷ Parser Options
 parseOptions =
   Options ⊳ some (textualArgument (metavar "IMDB ID"))
-          ⊵ nub ⊳ (many (textualOption (ю [ short 'w', long "wants", long "want"
-                                          , help "wants to see" ])))
-          ⊵ nub ⊳ (many (textualOption (ю [ short 'h', long "has-seen", long "seen"
-                                          , help "has seen" ])))
+          ⊵ nub ⊳ many (textualOption (ю [ short 'w', long "wants", long "want"
+                                          , help "wants to see" ]))
+          ⊵ nub ⊳ many (textualOption (ю [ short 'h', long "has-seen", long "seen"
+                                          , help "has seen" ]))
 
 ------------------------------------------------------------
 
@@ -614,7 +614,7 @@ writeMovie tt sanitized_title uk_cert title_response fn = do
         , cover         = MDInternalLink $ sanitized_title ⊙ [pc|jpg|]
         , ukCertificate = uk_cert
         , summary       = ""    ⧐ plot title_response
-        , year          = (startYear title_response)
+        , year          = startYear title_response
         , duration      = formatDuration (runtimeSeconds title_response)
         , interests'    = map interestName ⊳ interests title_response
         , stars'        = map displayName  ⊳ stars     title_response
@@ -700,7 +700,7 @@ ensureDir ∷ ∀ ε δ ρ ω μ . (MonadIO μ, DirAs δ, AsIOError ε, Printabl
             δ → μ ()
 ensureDir d = do
   do_mock ← asks (view doMock)
-  ftype ⊳⊳ (stat Informational 𝓝 d NoMock) ≫ \ case
+  ftype ⊳⊳ stat Informational 𝓝 d NoMock ≫ \ case
     𝓝           → mkdir Informational d 0o755 do_mock
     𝓙 Directory → return ()
     𝓙 ft        → throwUserError ([fmtT|not a directory: %T (got a %w)|] d ft)
@@ -778,11 +778,11 @@ processTitle info_dir opts tt = do
           maybeImageResponse ← fetchJson imagesUrl
           case maybeImageResponse of
             𝓙 imageResponse → do
-              let posterImages = filter (\ image → (imageType image) == "poster") (images imageResponse)
+              let posterImages = filter (\ image → imageType image == "poster") (images imageResponse)
               if null posterImages
                 then liftIO $ putStrLn "No images found"
                 else do
-                  liftIO $ putStrLn $ "Writing " ◇ (toString image_target_path) ◇ "..."
+                  liftIO $ putStrLn $ "Writing " ◇ toString image_target_path ◇ "..."
                   case head posterImages of
                     𝓝    → liftIO $ putStrLn "no image found"
                     𝓙 pI → downloadAndResizeImage (url pI) image_target_path
@@ -800,7 +800,7 @@ processTitle info_dir opts tt = do
 
           let people_dir     = info_dir ⫻ [reldir|people/|]
               person_dir p   = people_dir ⫻ fromList [personComponent p]
-              person_fn bf p = person_dir p ⫻ (__parse__ $ bf (personPrefix p))
+              person_fn bf p = person_dir p ⫻ __parse__ $ bf (personPrefix p)
 
           forM_ (people opts) $
             ensureInternalLink sanitized_title ∘ person_fn [fmtT|%t-wants-to-see.md|]
