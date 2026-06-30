@@ -14,7 +14,8 @@ module Main where
 import Base1
 
 -- putStrLn => log, or error?
-import Prelude  ( Int, div, error, filter, map, mod, null, putStrLn, toEnum )
+import Prelude  ( Double, Int,
+                  div, error, filter, map, mod, null, putStrLn, toEnum, truncate )
 
 import qualified Data.ByteString      as BSS
 import qualified Network.HTTP.Simple  as HTTP
@@ -28,8 +29,10 @@ import qualified Data.Text            as T
 
 import qualified Data.Aeson           as Aeson
 
-import Data.Aeson        ( FromJSON, ToJSON, (.:), (.:?), defaultOptions,fieldLabelModifier,
-                           omitNothingFields, genericToJSON, withObject, withText )
+import Data.Aeson        ( FromJSON, ToJSON, (.:), (.:?), defaultOptions,
+                           fieldLabelModifier, omitNothingFields, genericToJSON,
+                           withObject, withScientific, withText
+                         )
 import Data.Aeson.Types  ( Object, parseFail )
 
 -- base --------------------------------
@@ -37,7 +40,7 @@ import Data.Aeson.Types  ( Object, parseFail )
 import Data.List     ( any, dropWhileEnd, nub, span )
 import GHC.Generics  ( Generic )
 import System.IO     ( Handle, SeekMode( AbsoluteSeek ), hFileSize, hSeek )
-import Text.Read     ( read )
+import Text.Read     ( read, readEither )
 
 -- bytestring --------------------------
 
@@ -149,6 +152,10 @@ import OptParsePlus  ( textualArgument, textualOption )
 import Text.Parser.Char         ( CharParsing, anyChar, string )
 import Text.Parser.Combinators  ( choice, optional )
 
+-- scientific --------------------------
+
+import Data.Scientific  ( isInteger, toRealFloat )
+
 -- stdmain -----------------------------
 
 import StdMain  ( stdMainSimple )
@@ -168,10 +175,35 @@ import Data.Yaml  ( decodeEither', encode )
 
 --------------------------------------------------------------------------------
 
+newtype Year = Year { unYear ∷ Word8 } deriving Show -- offset from 1900
+
+--------------------
+
+instance Printable Year where
+  print = P.text ∘ [fmt|%d|] ∘ (1900+) ∘ fromIntegral @_ @Word16 ∘ unYear
+
+--------------------
+
+instance ToJSON Year where toJSON = Aeson.String ∘ toText
+
+--------------------
+
+instance FromJSON Year where
+  parseJSON = withScientific "Year" $ \ s →
+    let y ∷ Word16 = truncate s
+    in if y < 1900
+       -- XXX have fmt handle Scientifics
+       then parseFail $ [fmt|year '%T' < 1900|] (toRealFloat @Double s)
+       else if y > 2155
+            then parseFail $ [fmt|year '%T' > 2155|] (toRealFloat @Double s)
+            else pure $ Year (fromIntegral $ y-1900)
+
+------------------------------------------------------------
+
 -- | Data types for IMDB responses
 
 data TitleResponse = TitleResponse { primaryTitle   ∷ 𝕋
-                                   , startYear      ∷ 𝕄 Int
+                                   , startYear      ∷ 𝕄 Year
                                    , runtimeSeconds ∷ 𝕄 Int
                                    , plot           ∷ 𝕄 𝕋
                                    , interests      ∷ 𝕄 [Interest]
@@ -212,6 +244,32 @@ instance FromJSON Person' where
 
 ------------------------------------------------------------
 
+newtype Rating = Rating { unRating ∷ 𝕋 }  deriving Show
+
+--------------------
+
+instance Printable Rating where
+  print = P.text ∘ unRating
+
+--------------------
+
+instance FromJSON Rating where
+  -- we parse everything here, there's too many different ratings in different
+  -- countries; but at least it's its own type
+  parseJSON = withText "Rating" $ pure ∘ Rating
+
+--------------------
+
+instance ToJSON Rating where
+  toJSON (Rating t) = Aeson.String t
+
+------------------------------------------------------------
+
+data Certificate = Certificate { country ∷ Country, rating ∷ Rating }
+  deriving Show
+
+--------------------
+
 data CertificateResponse = CertificateResponse { certificates ∷ [Certificate] }
   deriving Show
 
@@ -222,10 +280,6 @@ instance FromJSON CertificateResponse where
     withObject "CertificateResponse" $ \ v → CertificateResponse <$> v .: "certificates"
 
 ------------------------------------------------------------
-
-data Certificate = Certificate { country ∷ Country , rating ∷ 𝕋 } deriving Show
-
---------------------
 
 instance FromJSON Certificate where
   parseJSON =
@@ -281,9 +335,9 @@ instance ToJSON MDInternalLink where
 data FrontMatter = FrontMatter { imdb          ∷ IMDB_ID
                                , title         ∷ 𝕋
                                , cover         ∷ MDInternalLink
-                               , ukCertificate ∷ 𝕋
+                               , ukCertificate ∷ 𝕄 Rating
                                , summary       ∷ 𝕋
-                               , year          ∷ 𝕋
+                               , year          ∷ 𝕄 Year
                                , duration      ∷ 𝕋
                                , interests'    ∷ 𝕄 [𝕋]
                                , stars'        ∷ 𝕄 [𝕋]
@@ -476,14 +530,14 @@ fetchJson uri_ = do
 ----------------------------------------
 
 -- | Sanitize title for filename
-titleFilename ∷ 𝕋 → 𝕄 Int → PathComponent
+titleFilename ∷ 𝕋 → 𝕄 Year → PathComponent
 titleFilename title year =
   let name = case breakOn " " $ T.replace "/" "-" $ T.replace ":" "-" title of
                ("The", rest) → dropWhile (≡' ') rest ◇ "," ◇ "The"
                ("A",   rest) → dropWhile (≡' ') rest ◇ "," ◇ "A"
                ("An",  rest) → dropWhile (≡' ') rest ◇ "," ◇ "An"
                (ini,   rest) → ini ◇ rest
-      year_text = "" ⧐ ([fmt|  (%d)|] ⊳ year)
+      year_text = "" ⧐ ([fmt|  (%T)|] ⊳ year)
   in  __parse__ $ name ◇ year_text
 
 ----------------------------------------
@@ -552,15 +606,15 @@ mdInternalLink = [fmt|[[%T]]|]
 writeMovie ∷ ∀ ε ρ μ .
              (MonadIO μ, MonadLog (Log MockIOClass) μ, MonadCatch μ,
               HasDoMock ρ, MonadReader ρ μ, AsIOError ε, Printable ε, MonadError ε μ) =>
-             IMDB_ID → PathComponent → 𝕄 𝕋 → TitleResponse → AbsFile → μ ()
+             IMDB_ID → PathComponent → 𝕄 Rating → TitleResponse → AbsFile → μ ()
 writeMovie tt sanitized_title uk_cert title_response fn = do
   let fm = FrontMatter
         { imdb          = tt
         , title         = primaryTitle title_response
         , cover         = MDInternalLink $ sanitized_title ⊙ [pc|jpg|]
-        , ukCertificate = "N/A" ⧐ uk_cert
+        , ukCertificate = uk_cert
         , summary       = ""    ⧐ plot title_response
-        , year          = maybe "N/A" (T.pack . show) (startYear title_response)
+        , year          = (startYear title_response)
         , duration      = formatDuration (runtimeSeconds title_response)
         , interests'    = map interestName ⊳ interests title_response
         , stars'        = map displayName  ⊳ stars     title_response
