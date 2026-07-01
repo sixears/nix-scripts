@@ -14,8 +14,7 @@ module Main where
 import Base1
 
 -- putStrLn => log, or error?
-import Prelude  ( Double,
-                  div, error, filter, map, mod, null, putStrLn, toEnum, truncate )
+import Prelude  ( Double, div, error, filter, map, mod, null, toEnum, truncate )
 
 import qualified Data.ByteString      as BSS
 import qualified Network.HTTP.Simple  as HTTP
@@ -38,6 +37,7 @@ import Data.Aeson.Types  ( Object, parseFail )
 -- base --------------------------------
 
 import Data.List     ( any, dropWhileEnd, nub, span )
+import Data.Maybe    ( listToMaybe )
 import GHC.Generics  ( Generic )
 import System.IO     ( Handle, SeekMode( AbsoluteSeek ), hFileSize, hSeek )
 import Text.Read     ( read )
@@ -82,7 +82,7 @@ import Control.Lens.Getter  ( view )
 
 -- log-plus ----------------------------
 
-import Log  ( Log, errT, infoT )
+import Log  ( Log, errT, infoT, noticeT )
 
 -- logging-effect ----------------------
 
@@ -267,29 +267,71 @@ instance ToJSON Rating where
 
 ------------------------------------------------------------
 
-data Certificate = Certificate { country ∷ Country, rating ∷ Rating }
+class HasCountry α where
+  country ∷ Lens' α Country
+
+------------------------------------------------------------
+
+class HasRating α where
+  rating ∷ Lens' α Rating
+
+------------------------------------------------------------
+
+data Certificate = Certificate { _country ∷ Country, _rating ∷ Rating }
+  deriving Show
+
+----------
+
+instance HasCountry Certificate where
+  country = lens _country (\ c y → c { _country = y })
+
+----------
+
+instance HasRating Certificate where
+  rating = lens _rating (\ c r → c { _rating = r })
+
+------------------------------------------------------------
+
+class HasCertificates α where
+  certificates ∷ Lens' α [Certificate]
+
+------------------------------------------------------------
+
+newtype CertificateResponse = CertificateResponse { _certificates ∷ [Certificate]}
   deriving Show
 
 --------------------
 
-newtype CertificateResponse = CertificateResponse { certificates ∷ [Certificate] }
-  deriving Show
+instance HasCertificates CertificateResponse where
+  certificates = lens _certificates (\ _ cs → CertificateResponse cs)
 
 --------------------
 
 instance FromJSON CertificateResponse where
   parseJSON =
-    withObject "CertificateResponse" $ \ v → CertificateResponse <$> v .: "certificates"
+    withObject "CertificateResponse" $ \ v →
+      CertificateResponse <$> v .: "certificates"
 
 ------------------------------------------------------------
 
 instance FromJSON Certificate where
   parseJSON =
-    withObject "Certificate" $ \ v → Certificate <$> v .: "country" <*> v .: "rating"
+    withObject "Certificate" $ \ v →
+      Certificate <$> v .: "country" <*> v .: "rating"
 
 ------------------------------------------------------------
 
-newtype Country = Country { code ∷ 𝕋 } deriving Show
+class HasCountryCode α where
+  countryCode ∷ Lens' α 𝕋
+
+------------------------------------------------------------
+
+newtype Country = Country { _code ∷ 𝕋 } deriving Show
+
+----------
+
+instance HasCountryCode Country where
+  countryCode = lens _code (\ _ c → Country { _code = c })
 
 --------------------
 
@@ -348,8 +390,10 @@ data FrontMatter = FrontMatter { imdb          ∷ IMDB_ID
   deriving Generic
 
 instance ToJSON FrontMatter where
-  toJSON = genericToJSON defaultOptions { fieldLabelModifier = dropWhileEnd (≡'\'')
-                                        , omitNothingFields = 𝓣 }
+  toJSON = let modifier "ukCertificate" = "UK Certificate"
+               modifier t = dropWhileEnd (≡'\'') t
+           in  genericToJSON defaultOptions { fieldLabelModifier = modifier
+                                            , omitNothingFields = 𝓣 }
 
 instance Printable FrontMatter where
   print = P.utf8 ∘ encode
@@ -523,8 +567,8 @@ fetchResponse uri_ = do
 
 ----------------------------------------
 
-fetchJson ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, FromJSON a) => MyURI→μ (𝕄 a)
-fetchJson uri_ = do
+fetchJSON ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, FromJSON a) => MyURI→μ (𝕄 a)
+fetchJSON uri_ = do
   (Aeson.eitherDecode ∘ BSS.fromStrict) ⊳ fetchResponse uri_ ≫ \ case
     𝓛 err    → throwUserError $ "Error decoding JSON: " ◇ err
     𝓡 result → return $ 𝓙 result
@@ -748,14 +792,14 @@ processTitle ∷ ∀ ε ρ μ .
 processTitle info_dir opts tt = do
   let title_uri = imdbApiBase ‡ ҩ tt
   infoT $ [fmt|trying uri: %T|] title_uri
-  maybeTitleResponse ← fetchJson title_uri
+  maybeTitleResponse ← fetchJSON title_uri
   case maybeTitleResponse of
     𝓝 → errT $ [fmt|Failed to fetch title: %T|] tt
-    𝓙 titleResponse → do
-      let sanitized_title   = titleFilename (primaryTitle titleResponse) (startYear titleResponse)
+    𝓙 title_response → do
+      let file_title   = titleFilename (primaryTitle title_response) (startYear title_response)
           movies_dir        = info_dir ⫻ [reldir|movies/|]
-          md_fname          = fromPC (sanitized_title ⊙ [pc|md|])
-          jpg_fname         = fromPC (sanitized_title ⊙ [pc|jpg|])
+          md_fname          = fromPC (file_title ⊙ [pc|md|])
+          jpg_fname         = fromPC (file_title ⊙ [pc|jpg|])
           -- XXX lose typesig?
           target_path       ∷ AbsFile
           target_path       = movies_dir ⫻ md_fname
@@ -767,9 +811,9 @@ processTitle info_dir opts tt = do
          -- XXX use something better than Dir, e.g., MockIO
       exists ← liftIO $ Dir.doesFileExist (toString target_path)
       if exists
-        then liftIO $ putStrLn $ "Already exists: " ◇ toString target_path ◇ " (" ◇ toString tt ◇ ")"
+        then infoT $ [fmt|Already exists: %T (%T)|] target_path tt
         else do
-          liftIO $ putStrLn $ "Found title: " ◇ T.unpack (primaryTitle titleResponse)
+          infoT $ [fmt|Found title: %t|] (primaryTitle title_response)
 
           -- Create attachments directory if it doesn't exist
           -- XXX use something better than Dir, e.g., MockIO
@@ -777,38 +821,45 @@ processTitle info_dir opts tt = do
 
           -- Fetch and process images
           let imagesUrl = imdbApiBase ‡ [tt_pp, [pathPiece|images|]]
-          maybeImageResponse ← fetchJson imagesUrl
+          maybeImageResponse ← fetchJSON imagesUrl
           case maybeImageResponse of
             𝓙 imageResponse → do
               let posterImages = filter (\ image → imageType image == "poster") (images imageResponse)
               if null posterImages
-                then liftIO $ putStrLn "No images found"
+                then infoT "No images found"
                 else do
-                  liftIO $ putStrLn $ "Writing " ◇ toString image_target_path ◇ "..."
+                  infoT $ [fmt|Writing %T…|] image_target_path
                   case head posterImages of
-                    𝓝    → liftIO $ putStrLn "no image found"
+                    𝓝    → infoT "no image found"
                     𝓙 pI → downloadAndResizeImage (url pI) image_target_path
-            _ → liftIO $ putStrLn "Failed to fetch images"
+            _ → infoT "Failed to fetch images"
 
           -- Fetch certificate
           let certificate_url = imdbApiBase ‡ [tt_pp, [pathPiece|certificates|]]
-          maybeCertificateResponse ← fetchJson certificate_url
-          let ukCertificate = case maybeCertificateResponse of
-                𝓙 certificateResponse →
-                  Maybe.listToMaybe $ map rating $ filter (\ certificate → code (country certificate) == "GB") (certificates certificateResponse)
+          maybe_certificate_response ← fetchJSON @_ @CertificateResponse certificate_url
+          let filtGB = filter $ (≡"GB") ∘ view (country ∘ countryCode)
+          let uk_certificate = case maybe_certificate_response of
+                𝓙 certificate_response →
+                  listToMaybe $ map (view rating) $ filtGB (certificate_response ⊣ certificates)
+                𝓙 certificate_response →
+                  listToMaybe $ map (view rating) $ filter (\ certificate →  (certificate ⊣ country ∘ countryCode) == "GB") (certificate_response ⊣ certificates)
                 𝓝 → 𝓝
 
-          writeMovie tt sanitized_title ukCertificate titleResponse target_path
+          case uk_certificate of
+            𝓝   → noticeT $ [fmt|No UK Certificate found for %T|] (primaryTitle title_response)
+            𝓙 c → noticeT $ [fmt|UK Certificate '%T' for %T|] c (primaryTitle title_response)
+
+          writeMovie tt file_title uk_certificate title_response target_path
 
           let people_dir     = info_dir ⫻ [reldir|people/|]
               person_dir p   = people_dir ⫻ fromList [personComponent p]
               person_fn bf p = person_dir p ⫻ __parse__ (bf (personPrefix p))
 
           forM_ (people opts) $
-            ensureInternalLink sanitized_title ∘ person_fn [fmtT|%t-wants-to-see.md|]
+            ensureInternalLink file_title ∘ person_fn [fmtT|%t-wants-to-see.md|]
 
           forM_ (seen opts) $
-            ensureInternalLink sanitized_title ∘ person_fn [fmtT|%t-has-seen.md|]
+            ensureInternalLink file_title ∘ person_fn [fmtT|%t-has-seen.md|]
 
 ----------------------------------------
 
