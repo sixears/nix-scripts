@@ -1,6 +1,8 @@
 -- IMDB to Obsidian Haskell Script
 -- Uses ImageMagick (`magick`) for image resizing via command line
 
+-- XXX add logging timestamps
+
 {-# LANGUAGE DataKinds         #-}
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE LambdaCase        #-}
@@ -81,7 +83,7 @@ import Control.Lens.Getter  ( view )
 
 -- log-plus ----------------------------
 
-import Log  ( Log, errT, infoT, noticeT )
+import Log  ( Log, errT, infoT, noticeT, warnT )
 
 -- logging-effect ----------------------
 
@@ -121,10 +123,12 @@ import Data.MonoTraversable  ( Element )
 
 -- modern-uri --------------------------
 
-import Text.URI       ( RText, RTextLabel( PathPiece ), URI,
-                        mkPathPiece, mkURI, render, renderStr )
-import Text.URI.Lens  ( uriPath )
-import Text.URI.QQ    ( pathPiece, uri )
+import Text.URI       ( QueryParam( QueryParam ), RText,
+                        RTextLabel( PathPiece, QueryKey, QueryValue ), URI,
+                        mkPathPiece, mkURI, render, renderStr
+                      )
+import Text.URI.Lens  ( uriPath, uriQuery )
+import Text.URI.QQ    ( pathPiece, queryKey, queryValue, uri )
 
 -- mtl ---------------------------------
 
@@ -353,6 +357,11 @@ instance FromJSON ImageResponse where
 
 ------------------------------------------------------------
 
+class HasQueryParams α where
+  queryParams ∷ Lens' α [QueryParam]
+
+------------------------------------------------------------
+
 newtype MyURI = MyURI { unMyURI ∷ URI } deriving Show
 
 myURI ∷ Lens' MyURI URI
@@ -363,6 +372,9 @@ instance FromJSON MyURI where
 
 instance Printable MyURI where
   print = P.text ∘ render ∘ unMyURI
+
+instance HasQueryParams MyURI where
+  queryParams = myURI ∘ uriQuery
 
 ------------------------------------------------------------
 
@@ -598,7 +610,8 @@ fetchResponse uri_ = do
 
 ----------------------------------------
 
-fetchJSON ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, FromJSON a) => MyURI→μ (𝕄 a)
+fetchJSON ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, FromJSON a) =>
+            MyURI → μ (𝕄 a)
 fetchJSON uri_ = do
   (Aeson.eitherDecode ∘ BSS.fromStrict) ⊳ fetchResponse uri_ ≫ \ case
     𝓛 err    → throwUserError $ "Error decoding JSON: " ◇ err
@@ -836,6 +849,28 @@ gbRating tt ttle = do
 
 ----------------------------------------
 
+fetchImages ∷ ∀ ε α ρ μ .
+              (MonadIO μ, MonadLog (Log MockIOClass) μ, ToPathPiece α,
+               AsIOError ε, AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
+               Printable ε, MonadError ε μ, HasDoMock ρ, MonadReader ρ μ) =>
+              α → AbsFile → μ ()
+
+fetchImages tt image_target_path = do
+  let uri = imdbApiBase ‡ [toPathPiece tt, [pathPiece|images|]] & queryParams ⊢ [QueryParam [queryKey|types|] [queryValue|poster|]]
+  fetchJSON uri ≫ \ case
+    𝓙 imageResponse → do
+      let posterImages = filter (\ image → imageType image ≡ "poster") (images imageResponse)
+      if null posterImages
+        then infoT "No images found"
+        else do
+          infoT $ [fmt|Writing %T…|] image_target_path
+          case head posterImages of
+            𝓝    → infoT "no image found"
+            𝓙 pI → downloadAndResizeImage (url pI) image_target_path
+    _ → warnT "Failed to fetch images"
+
+----------------------------------------
+
 -- | Process a single title
 -- processTitle ∷ 𝕋 → Options → IO ()
 processTitle ∷ ∀ ε ρ μ .
@@ -858,7 +893,7 @@ processTitle info_dir opts tt = do
           target_path       = movies_dir ⫻ md_fname
           attachment_dir    = movies_dir ⫻ [reldir|_attachments/|]
           image_target_path = attachment_dir ⫻ jpg_fname
-      infoT $ [fmt|Fetched title: %T|] tt
+      infoT $ [fmt|Fetched title (%T): %T|] tt ttle
       -- check if the file already exists
          -- XXX use something better than Dir, e.g., MockIO
       exists ← liftIO $ Dir.doesFileExist (toString target_path)
@@ -872,19 +907,7 @@ processTitle info_dir opts tt = do
           liftIO $ Dir.createDirectoryIfMissing 𝓣 (toString attachment_dir)
 
           -- Fetch and process images
-          let imagesUrl = imdbApiBase ‡ [toPathPiece tt, [pathPiece|images|]]
-          maybeImageResponse ← fetchJSON imagesUrl
-          case maybeImageResponse of
-            𝓙 imageResponse → do
-              let posterImages = filter (\ image → imageType image == "poster") (images imageResponse)
-              if null posterImages
-                then infoT "No images found"
-                else do
-                  infoT $ [fmt|Writing %T…|] image_target_path
-                  case head posterImages of
-                    𝓝    → infoT "no image found"
-                    𝓙 pI → downloadAndResizeImage (url pI) image_target_path
-            _ → infoT "Failed to fetch images"
+          fetchImages tt image_target_path
 
           -- Fetch certificate
           gb_rating ← gbRating tt ttle
