@@ -19,7 +19,6 @@ import Prelude  ( Double, div, error, filter, map, mod, null, toEnum, truncate )
 import qualified Data.ByteString      as BSS
 import qualified Network.HTTP.Simple  as HTTP
 import qualified System.Directory     as Dir
-import qualified Data.Maybe           as Maybe
 import qualified Control.Monad        as Monad
 import qualified Data.Yaml            as Yaml
 import qualified Data.Text            as T
@@ -204,17 +203,17 @@ instance FromJSON Year where
 
 -- | Data types for IMDB responses
 
-data TitleResponse = TitleResponse { primaryTitle   ∷ 𝕋
+data TitleResponse = TitleResponse { _trTitle       ∷ Title
                                    , startYear      ∷ 𝕄 Year
                                    , runtimeSeconds ∷ 𝕄 Word16
                                    , plot           ∷ 𝕄 𝕋
                                    , interests      ∷ 𝕄 [Interest]
-                                   , stars          ∷ 𝕄 [IMDB_Person]
-                                   , directors      ∷ 𝕄 [IMDB_Person]
+                                   , stars          ∷ 𝕄 [IMDBPerson]
+                                   , directors      ∷ 𝕄 [IMDBPerson]
                                    }
   deriving Show
 
---------------------
+----------
 
 instance FromJSON TitleResponse where
   parseJSON = withObject "TitleResponse" $ \ v → do
@@ -225,6 +224,11 @@ instance FromJSON TitleResponse where
                   ⊵ v .:? "interests"
                   ⊵ v .:? "stars"
                   ⊵ v .:? "directors"
+
+--------------------
+
+instance HasTitle TitleResponse where
+  title = lens _trTitle (\ tr t → tr { _trTitle = t })
 
 ------------------------------------------------------------
 
@@ -237,12 +241,12 @@ instance FromJSON Interest where
 
 ------------------------------------------------------------
 
-newtype IMDB_Person = IMDB_Person { displayName ∷ 𝕋 } deriving Show
+newtype IMDBPerson = IMDBPerson { displayName ∷ 𝕋 } deriving Show
 
 --------------------
 
-instance FromJSON IMDB_Person where
-  parseJSON = withObject "Person" $ \ v → IMDB_Person <$> v .: "displayName"
+instance FromJSON IMDBPerson where
+  parseJSON = withObject "Person" $ \ v → IMDBPerson <$> v .: "displayName"
 
 ------------------------------------------------------------
 
@@ -376,8 +380,25 @@ instance ToJSON MDInternalLink where
 
 ------------------------------------------------------------
 
+newtype Duration = Duration { _durationInSeconds ∷ Word16 }
+
+------------------------------------------------------------
+
+newtype Title = Title { _unTitle ∷ 𝕋 }  deriving  (FromJSON, Show, ToJSON)
+
+----------
+
+class HasTitle α where
+  title ∷ Lens' α Title
+
+----------
+
+instance Printable Title where print = P.text ∘ _unTitle
+
+------------------------------------------------------------
+
 data FrontMatter = FrontMatter { imdb          ∷ IMDB_ID
-                               , title         ∷ 𝕋
+                               , _fmTitle      ∷ Title
                                , cover         ∷ MDInternalLink
                                , ukCertificate ∷ 𝕄 Rating
                                , summary       ∷ 𝕋
@@ -389,14 +410,24 @@ data FrontMatter = FrontMatter { imdb          ∷ IMDB_ID
                                }
   deriving Generic
 
+----------
+
 instance ToJSON FrontMatter where
   toJSON = let modifier "ukCertificate" = "UK Certificate"
+               modifier "_fmTitle" = "title"
                modifier t = dropWhileEnd (≡'\'') t
            in  genericToJSON defaultOptions { fieldLabelModifier = modifier
                                             , omitNothingFields = 𝓣 }
 
+----------
+
 instance Printable FrontMatter where
   print = P.utf8 ∘ encode
+
+--------------------
+
+instance HasTitle FrontMatter where
+  title = lens _fmTitle (\ fm t → fm { _fmTitle = t })
 
 ------------------------------------------------------------
 
@@ -470,7 +501,7 @@ parsePerson _        = 𝓝
 
 ------------------------------------------------------------
 
-class    ToPathPiece α where
+class ToPathPiece α where
   toPathPiece ∷ α → RText 'PathPiece
   ҩ ∷ α → RText 'PathPiece
   ҩ = toPathPiece
@@ -576,9 +607,9 @@ fetchJSON uri_ = do
 ----------------------------------------
 
 -- | Sanitize title for filename
-titleFilename ∷ 𝕋 → 𝕄 Year → PathComponent
-titleFilename title year =
-  let name = case breakOn " " $ T.replace "/" "-" $ T.replace ":" "-" title of
+titleFilename ∷ Title → 𝕄 Year → PathComponent
+titleFilename ttle year =
+  let name = case breakOn " " $ T.replace "/" "-" $ T.replace ":" "-" (toText ttle) of
                ("The", rest) → dropWhile (≡' ') rest ◇ "," ◇ "The"
                ("A",   rest) → dropWhile (≡' ') rest ◇ "," ◇ "A"
                ("An",  rest) → dropWhile (≡' ') rest ◇ "," ◇ "An"
@@ -656,7 +687,7 @@ writeMovie ∷ ∀ ε ρ μ .
 writeMovie tt sanitized_title uk_cert title_response fn = do
   let fm = FrontMatter
         { imdb          = tt
-        , title         = primaryTitle title_response
+        , _fmTitle      = title_response ⊣ title
         , cover         = MDInternalLink $ sanitized_title ⊙ [pc|jpg|]
         , ukCertificate = uk_cert
         , summary       = ""    ⧐ plot title_response
@@ -782,6 +813,29 @@ ensureInternalLink link fn = do
 
 ----------------------------------------
 
+gbCert ∷ HasCertificates α => α → 𝕄 Rating
+gbCert response =
+  let filtGB = filter $ (≡"GB") ∘ view (country ∘ countryCode)
+  in  listToMaybe $ map (view rating) $ filtGB (response ⊣ certificates)
+
+----------------------------------------
+
+gbRating ∷ ∀ ε α ω μ . (MonadIO μ, ToPathPiece α, MonadLog (Log ω) μ, Default ω,
+                        AsIOError ε, MonadError ε μ) =>
+           α → Title → μ (𝕄 Rating)
+
+gbRating tt ttle = do
+  let certificate_url = imdbApiBase ‡ [toPathPiece tt, [pathPiece|certificates|]]
+  let fetch_certificate_response = fetchJSON @_ @CertificateResponse
+  gb_rating ← fetch_certificate_response certificate_url ⊲ (join ∘ (gbCert ⊳))
+  let cert_notice ∷ 𝕄 Rating → Title → 𝕋
+      cert_notice = maybe [fmt|No UK Certificate found for %T|]
+                          [fmt|UK Certificate '%T' for %T|]
+  noticeT $ cert_notice gb_rating ttle
+  return gb_rating
+
+----------------------------------------
+
 -- | Process a single title
 -- processTitle ∷ 𝕋 → Options → IO ()
 processTitle ∷ ∀ ε ρ μ .
@@ -796,16 +850,14 @@ processTitle info_dir opts tt = do
   case maybeTitleResponse of
     𝓝 → errT $ [fmt|Failed to fetch title: %T|] tt
     𝓙 title_response → do
-      let file_title   = titleFilename (primaryTitle title_response) (startYear title_response)
+      let ttle              = title_response ⊣ title
+          file_title        = titleFilename ttle (startYear title_response)
           movies_dir        = info_dir ⫻ [reldir|movies/|]
           md_fname          = fromPC (file_title ⊙ [pc|md|])
           jpg_fname         = fromPC (file_title ⊙ [pc|jpg|])
-          -- XXX lose typesig?
-          target_path       ∷ AbsFile
           target_path       = movies_dir ⫻ md_fname
           attachment_dir    = movies_dir ⫻ [reldir|_attachments/|]
           image_target_path = attachment_dir ⫻ jpg_fname
-          tt_pp             = toPathPiece tt
       infoT $ [fmt|Fetched title: %T|] tt
       -- check if the file already exists
          -- XXX use something better than Dir, e.g., MockIO
@@ -813,14 +865,14 @@ processTitle info_dir opts tt = do
       if exists
         then infoT $ [fmt|Already exists: %T (%T)|] target_path tt
         else do
-          infoT $ [fmt|Found title: %t|] (primaryTitle title_response)
+          infoT $ [fmt|Found title: %T|] ttle
 
           -- Create attachments directory if it doesn't exist
           -- XXX use something better than Dir, e.g., MockIO
           liftIO $ Dir.createDirectoryIfMissing 𝓣 (toString attachment_dir)
 
           -- Fetch and process images
-          let imagesUrl = imdbApiBase ‡ [tt_pp, [pathPiece|images|]]
+          let imagesUrl = imdbApiBase ‡ [toPathPiece tt, [pathPiece|images|]]
           maybeImageResponse ← fetchJSON imagesUrl
           case maybeImageResponse of
             𝓙 imageResponse → do
@@ -835,21 +887,8 @@ processTitle info_dir opts tt = do
             _ → infoT "Failed to fetch images"
 
           -- Fetch certificate
-          let certificate_url = imdbApiBase ‡ [tt_pp, [pathPiece|certificates|]]
-          maybe_certificate_response ← fetchJSON @_ @CertificateResponse certificate_url
-          let filtGB = filter $ (≡"GB") ∘ view (country ∘ countryCode)
-          let uk_certificate = case maybe_certificate_response of
-                𝓙 certificate_response →
-                  listToMaybe $ map (view rating) $ filtGB (certificate_response ⊣ certificates)
-                𝓙 certificate_response →
-                  listToMaybe $ map (view rating) $ filter (\ certificate →  (certificate ⊣ country ∘ countryCode) == "GB") (certificate_response ⊣ certificates)
-                𝓝 → 𝓝
-
-          case uk_certificate of
-            𝓝   → noticeT $ [fmt|No UK Certificate found for %T|] (primaryTitle title_response)
-            𝓙 c → noticeT $ [fmt|UK Certificate '%T' for %T|] c (primaryTitle title_response)
-
-          writeMovie tt file_title uk_certificate title_response target_path
+          gb_rating ← gbRating tt ttle
+          writeMovie tt file_title gb_rating title_response target_path
 
           let people_dir     = info_dir ⫻ [reldir|people/|]
               person_dir p   = people_dir ⫻ fromList [personComponent p]
