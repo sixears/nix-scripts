@@ -83,7 +83,7 @@ import Control.Lens.Getter  ( view )
 
 -- log-plus ----------------------------
 
-import Log  ( Log, errT, infoT, noticeT, warnT )
+import Log  ( Log, errT, infoT, noticeT )
 
 -- logging-effect ----------------------
 
@@ -609,11 +609,11 @@ fetchResponse uri_ = do
 ----------------------------------------
 
 fetchJSON ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, FromJSON a) =>
-            MyURI → μ (𝕄 a)
+            MyURI → μ a
 fetchJSON uri_ = do
   (Aeson.eitherDecode ∘ BSS.fromStrict) ⊳ fetchResponse uri_ ≫ \ case
     𝓛 err    → throwUserError $ "Error decoding JSON: " ◇ err
-    𝓡 result → return $ 𝓙 result
+    𝓡 result → return $ result
 
 ----------------------------------------
 
@@ -838,7 +838,7 @@ gbRating ∷ ∀ ε α ω μ . (MonadIO μ, ToPathPiece α, MonadLog (Log ω) μ
 gbRating tt ttle = do
   let certificate_url = imdbApiBase ‡ [toPathPiece tt, [pathPiece|certificates|]]
   let fetch_certificate_response = fetchJSON @_ @CertificateResponse
-  gb_rating ← fetch_certificate_response certificate_url ⊲ (join ∘ (gbCert ⊳))
+  gb_rating ← gbCert ⊳ fetch_certificate_response certificate_url
   let cert_notice ∷ 𝕄 Rating → Title → 𝕋
       cert_notice = maybe [fmt|No UK Certificate found for %T|]
                           [fmt|UK Certificate '%T' for %T|]
@@ -856,9 +856,14 @@ fetchImages ∷ ∀ ε α ρ μ .
 fetchImages tt image_target_path = do
   let uri' = imdbApiBase ‡ [toPathPiece tt, [pathPiece|images|]] & queryParams ⊢ params
                where params = [QueryParam [queryKey|types|] [queryValue|poster|]]
-  fetchJSON uri' ≫ \ case
-    𝓙 imageResponse → do
-      let posterImages = images imageResponse
+  images ⊳ fetchJSON uri' ≫ \ case
+        []    → infoT "No images found"
+        (i:_) → do
+          infoT $ [fmt|Writing %T…|] image_target_path
+          downloadAndResizeImage (url i) image_target_path
+
+{-
+  images ⊳ fetchJSON uri' ≫ \ posterImages → do
       if null posterImages
         then infoT "No images found"
         else do
@@ -866,7 +871,7 @@ fetchImages tt image_target_path = do
           case head posterImages of
             𝓝    → infoT "no image found"
             𝓙 pI → downloadAndResizeImage (url pI) image_target_path
-    𝓝 → warnT "Failed to fetch images"
+-}
 
 ----------------------------------------
 
