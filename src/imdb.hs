@@ -123,10 +123,8 @@ import Data.MonoTraversable  ( Element )
 
 -- modern-uri --------------------------
 
-import Text.URI       ( QueryParam( QueryParam ), RText,
-                        RTextLabel( PathPiece, QueryKey, QueryValue ), URI,
-                        mkPathPiece, mkURI, render, renderStr
-                      )
+import Text.URI       ( QueryParam( QueryParam ), RText, RTextLabel( PathPiece ), URI,
+                        mkPathPiece, mkURI, render, renderStr )
 import Text.URI.Lens  ( uriPath, uriQuery )
 import Text.URI.QQ    ( pathPiece, queryKey, queryValue, uri )
 
@@ -856,10 +854,11 @@ fetchImages ∷ ∀ ε α ρ μ .
               α → AbsFile → μ ()
 
 fetchImages tt image_target_path = do
-  let uri = imdbApiBase ‡ [toPathPiece tt, [pathPiece|images|]] & queryParams ⊢ [QueryParam [queryKey|types|] [queryValue|poster|]]
-  fetchJSON uri ≫ \ case
+  let uri' = imdbApiBase ‡ [toPathPiece tt, [pathPiece|images|]] & queryParams ⊢ params
+               where params = [QueryParam [queryKey|types|] [queryValue|poster|]]
+  fetchJSON uri' ≫ \ case
     𝓙 imageResponse → do
-      let posterImages = filter (\ image → imageType image ≡ "poster") (images imageResponse)
+      let posterImages = images imageResponse
       if null posterImages
         then infoT "No images found"
         else do
@@ -867,7 +866,7 @@ fetchImages tt image_target_path = do
           case head posterImages of
             𝓝    → infoT "no image found"
             𝓙 pI → downloadAndResizeImage (url pI) image_target_path
-    _ → warnT "Failed to fetch images"
+    𝓝 → warnT "Failed to fetch images"
 
 ----------------------------------------
 
