@@ -899,15 +899,22 @@ fetchImages ∷ ∀ ε α ρ μ .
               (MonadIO μ, MonadLog (Log MockIOClass) μ, ToPathPiece α,
                AsIOError ε, AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
                Printable ε, MonadError ε μ, HasDoMock ρ, MonadReader ρ μ) =>
-              α → AbsFile → μ ()
+              α → PathComponent → AbsDir → μ ()
 
-fetchImages tt image_target_path = do
-  let uri' = imdbApiBase ‡ [toPathPiece tt, [pathPiece|images|]] & queryParams ⊢ params
-               where params = [QueryParam [queryKey|types|] [queryValue|poster|]]
+fetchImages tt file_title movies_dir = do
+  let uri'              = imdbApiBase ‡ [toPathPiece tt, [pathPiece|images|]]
+                                      & queryParams ⊢ params
+                            where params = [QueryParam [queryKey|types|]
+                                           [queryValue|poster|]]
+      jpg_fname         = fromPC (file_title ⊙ [pc|jpg|])
+      attachment_dir    = movies_dir ⫻ [reldir|_attachments/|]
+      image_target_path = attachment_dir ⫻ jpg_fname
+
   images ⊳ fetchJSON uri' ≫ \ case
     []    → infoT "No images found"
     (i:_) → do
       infoT $ [fmt|Writing %T…|] image_target_path
+      ensureDir attachment_dir
       downloadAndResizeImage (url i) image_target_path
 
 ----------------------------------------
@@ -922,18 +929,24 @@ throwAlreadyExists s = throwIOErr alreadyExistsErrorType (toText s) 𝓝 ∘ �
 
 ----------------------------------------
 
-makeMovie ∷ ∀ ε ρ μ . (MonadIO μ, MonadLog (Log MockIOClass) μ, MonadCatch μ,
-                       HasDoMock ρ, MonadReader ρ μ,
-                       AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
-                       AsIOError ε, Printable ε, MonadError ε μ) =>
-            IMDB_ID → AbsDir → AbsDir → Options → TitleResponse → μ ()
 
-makeMovie tt movies_dir info_dir opts title_response = do
+
+----------------------------------------
+
+-- | Process a single title
+-- processTitle ∷ 𝕋 → Options → IO ()
+processTitle ∷ ∀ ε ρ μ .
+               (MonadIO μ, MonadLog (Log MockIOClass) μ, MonadCatch μ,
+                HasDoMock ρ, MonadReader ρ μ,
+                AsFPathError ε, AsIOError ε, AsCreateProcError ε, AsProcExitError ε, Printable ε, MonadError ε μ) =>
+               AbsDir → Options → IMDB_ID → μ ()
+processTitle info_dir opts tt = do
+  title_response ← fetchJSON (imdbApiBase ‡ ҩ tt)
+  infoT $ [fmt|fetched title (%T): %T|] tt (title_response ⊣ title)
+
   let ttle              = title_response ⊣ title
       file_title        = pathComponent title_response
-      jpg_fname         = fromPC (file_title ⊙ [pc|jpg|])
-      image_target_path = attachment_dir ⫻ jpg_fname
-      attachment_dir    = movies_dir ⫻ [reldir|_attachments/|]
+      movies_dir        = info_dir ⫻ [reldir|movies/|]
       md_fname          = fromPC (pathComponent title_response ⊙ [pc|md|])
       target_path       = movies_dir ⫻ md_fname
 
@@ -943,12 +956,8 @@ makeMovie tt movies_dir info_dir opts title_response = do
 
   infoT $ [fmt|writing file %T (%T)|] target_path ttle
 
-  -- Create attachments directory if it doesn't exist
-  -- XXX use something better than Dir, e.g., MockIO
-  ensureDir attachment_dir
-
   -- Fetch and process images
-  fetchImages tt image_target_path
+  fetchImages tt file_title movies_dir
 
   -- Fetch certificate
   gb_rating ← gbRating tt ttle
@@ -963,24 +972,6 @@ makeMovie tt movies_dir info_dir opts title_response = do
 
   forM_ (seen opts) $
     ensureInternalLink file_title ∘ person_fn [fmtT|%t-has-seen.md|]
-
-
-----------------------------------------
-
--- | Process a single title
--- processTitle ∷ 𝕋 → Options → IO ()
-processTitle ∷ ∀ ε ρ μ .
-               (MonadIO μ, MonadLog (Log MockIOClass) μ, MonadCatch μ,
-                HasDoMock ρ, MonadReader ρ μ,
-                AsFPathError ε, AsIOError ε, AsCreateProcError ε, AsProcExitError ε, Printable ε, MonadError ε μ) =>
-               AbsDir → Options → IMDB_ID → μ ()
-processTitle info_dir opts tt = do
-  let title_uri = imdbApiBase ‡ ҩ tt
-  infoT $ [fmt|trying uri: %T|] title_uri
-  title_response ← fetchJSON title_uri
-  let movies_dir        = info_dir ⫻ [reldir|movies/|]
-  infoT $ [fmt|fetched title (%T): %T|] tt (title_response ⊣ title)
-  makeMovie tt movies_dir info_dir opts title_response
 
 ----------------------------------------
 
