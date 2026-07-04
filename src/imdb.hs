@@ -37,11 +37,16 @@ import Data.Aeson.Types  ( Object, parseFail )
 
 -- base --------------------------------
 
-import Data.List     ( any, dropWhileEnd, nub, span )
-import Data.Maybe    ( listToMaybe )
-import GHC.Generics  ( Generic )
-import System.IO     ( Handle, SeekMode( AbsoluteSeek ), hFileSize, hSeek )
-import Text.Read     ( read )
+import Data.List        ( any, dropWhileEnd, nub, span )
+import Data.Maybe       ( listToMaybe )
+import GHC.Generics     ( Generic )
+import System.IO        ( Handle, SeekMode( AbsoluteSeek ), hFileSize, hSeek )
+import System.IO.Error  ( IOErrorType, alreadyExistsErrorType, mkIOError )
+import Text.Read        ( read )
+
+-- base-unicode-symbols ----------------
+
+import Data.Eq.Unicode  ( (≠) )
 
 -- bytestring --------------------------
 
@@ -69,6 +74,7 @@ import FPath.Dir               ( DirAs )
 import FPath.Error.FPathError  ( AsFPathError )
 import FPath.File              ( FileAs )
 import FPath.FileLike          ( (⊙) )
+import FPath.FPath             ( FPathAs )
 import FPath.Parseable         ( __parse__ )
 import FPath.PathComponent     ( PathComponent, pc )
 import FPath.RelDir            ( reldir )
@@ -83,7 +89,7 @@ import Control.Lens.Getter  ( view )
 
 -- log-plus ----------------------------
 
-import Log  ( Log, errT, infoT, noticeT )
+import Log  ( Log, debugT, infoT, noticeT )
 
 -- logging-effect ----------------------
 
@@ -108,7 +114,7 @@ import MockIO.Process.MLCmdSpec  ( ToMLCmdSpec )
 -- monaderror-io -----------------------
 
 import MonadError           ( eitherME )
-import MonadError.IO.Error  ( throwUserError )
+import MonadError.IO.Error  ( AsIOError( _IOErr ), throwUserError )
 
 -- monadio-plus ------------------------
 
@@ -142,7 +148,7 @@ import ParserPlus  ( digits )
 
 -- optparse-applicative ----------------
 
-import Options.Applicative  ( Parser, help, long, metavar, short )
+import Options.Applicative  ( Parser, flag, help, long, metavar, short )
 
 -- optparse-plus -----------------------
 
@@ -178,6 +184,11 @@ import Data.Yaml  ( decodeEither', encode )
 
 newtype Year = Year { unYear ∷ Word8 } deriving Show -- offset from 1900
 
+----------
+
+class HasYearY α where
+  yearY ∷ Lens' α (𝕄 Year)
+
 --------------------
 
 instance Printable Year where
@@ -203,10 +214,15 @@ instance FromJSON Year where
 
 ------------------------------------------------------------
 
+class AsPathComponent α where
+  pathComponent ∷ α → PathComponent
+
+------------------------------------------------------------
+
 -- | Data types for IMDB responses
 
 data TitleResponse = TitleResponse { _trTitle       ∷ Title
-                                   , startYear      ∷ 𝕄 Year
+                                   , _trYearY       ∷ 𝕄 Year
                                    , runtimeSeconds ∷ 𝕄 Word16
                                    , plot           ∷ 𝕄 𝕋
                                    , interests      ∷ 𝕄 [Interest]
@@ -231,6 +247,16 @@ instance FromJSON TitleResponse where
 
 instance HasTitle TitleResponse where
   title = lens _trTitle (\ tr t → tr { _trTitle = t })
+
+--------------------
+
+instance HasYearY TitleResponse where
+  yearY = lens _trYearY (\ tr y → tr { _trYearY = y })
+
+--------------------
+
+instance AsPathComponent TitleResponse where
+  pathComponent r = titleFilename (r ⊣ title) (r ⊣ yearY)
 
 ------------------------------------------------------------
 
@@ -412,7 +438,7 @@ data FrontMatter = FrontMatter { imdb          ∷ IMDB_ID
                                , cover         ∷ MDInternalLink
                                , ukCertificate ∷ 𝕄 Rating
                                , summary       ∷ 𝕋
-                               , year          ∷ 𝕄 Year
+                               , _fmYearY      ∷ 𝕄 Year
                                , duration      ∷ 𝕋
                                , interests'    ∷ 𝕄 [𝕋]
                                , stars'        ∷ 𝕄 [𝕋]
@@ -425,6 +451,7 @@ data FrontMatter = FrontMatter { imdb          ∷ IMDB_ID
 instance ToJSON FrontMatter where
   toJSON = let modifier "ukCertificate" = "UK Certificate"
                modifier "_fmTitle" = "title"
+               modifier "_fmYearY" = "year"
                modifier t = dropWhileEnd (≡'\'') t
            in  genericToJSON defaultOptions { fieldLabelModifier = modifier
                                             , omitNothingFields = 𝓣 }
@@ -548,9 +575,22 @@ instance ToPathPiece IMDB_ID where
 
 ------------------------------------------------------------
 
+data Overwrite  = Overwrite | NoOverwrite deriving (Eq,Show)
+
+------------------------------------------------------------
+
 -- | Command line options
-data Options = Options { tts :: [IMDB_ID], people :: [Person], seen :: [Person] }
+data Options = Options { tts        ∷ [IMDB_ID]
+                       , people     ∷ [Person]
+                       , seen       ∷ [Person]
+                       , _overwrite ∷ Overwrite
+                       }
   deriving Show
+
+----------
+
+overwrite ∷ Lens' Options Overwrite
+overwrite = lens _overwrite (\ o w → o { _overwrite = w })
 
 ----------------------------------------
 
@@ -561,6 +601,8 @@ parseOptions =
                                           , help "wants to see" ]))
           ⊵ nub ⊳ many (textualOption (ю [ short 'h', long "has-seen", long "seen"
                                           , help "has seen" ]))
+          ⊵ flag NoOverwrite Overwrite (ю [ short 'O', long "overwrite",
+                                            help "overwrite existing entry" ])
 
 ------------------------------------------------------------
 
@@ -598,18 +640,24 @@ parseRequest = eitherME (userE ∘ show) ∘ HTTP.parseRequest ∘ renderStr ∘
 
 ----------------------------------------
 
-fetchResponse ∷ ∀ ε μ . (MonadIO μ, AsIOError ε, MonadError ε μ) => MyURI → μ ByteString
+fetchResponse ∷ ∀ ε ω μ .
+                (MonadIO μ, AsIOError ε, MonadError ε μ,
+                 HasDoMock ω, HasIOClass ω, Default ω, MonadLog (Log ω) μ) =>
+                MyURI → μ ByteString
 fetchResponse uri_ = do
+  debugT $ [fmt|fetching URI: %T|] uri_
   response ← parseRequest uri_ ≫ HTTP.httpBS
   let status = HTTP.getResponseStatusCode response
+  debugT $ [fmt|got status %d for URI: %T|] status uri_
   if status == 200
   then return $ HTTP.getResponseBody response
   else throwUserError $ "HTTP error: " ◇ show status
 
 ----------------------------------------
 
-fetchJSON ∷ ∀ ε a μ . (MonadIO μ, AsIOError ε, MonadError ε μ, FromJSON a) =>
-            MyURI → μ a
+fetchJSON ∷ ∀ ε α ω μ . (MonadIO μ, AsIOError ε, MonadError ε μ, FromJSON α,
+                         HasDoMock ω, HasIOClass ω, Default ω, MonadLog (Log ω) μ) =>
+            MyURI → μ α
 fetchJSON uri_ = do
   (Aeson.eitherDecode ∘ BSS.fromStrict) ⊳ fetchResponse uri_ ≫ \ case
     𝓛 err    → throwUserError $ "Error decoding JSON: " ◇ err
@@ -695,14 +743,14 @@ writeMovie ∷ ∀ ε ρ μ .
              (MonadIO μ, MonadLog (Log MockIOClass) μ, MonadCatch μ,
               HasDoMock ρ, MonadReader ρ μ, AsIOError ε, Printable ε, MonadError ε μ) =>
              IMDB_ID → PathComponent → 𝕄 Rating → TitleResponse → AbsFile → μ ()
-writeMovie tt sanitized_title uk_cert title_response fn = do
+writeMovie tt file_title uk_cert title_response fn = do
   let fm = FrontMatter
         { imdb          = tt
         , _fmTitle      = title_response ⊣ title
-        , cover         = MDInternalLink $ sanitized_title ⊙ [pc|jpg|]
+        , cover         = MDInternalLink $ file_title ⊙ [pc|jpg|]
         , ukCertificate = uk_cert
         , summary       = ""    ⧐ plot title_response
-        , year          = startYear title_response
+        , _fmYearY      = title_response ⊣ yearY
         , duration      = formatDuration (runtimeSeconds title_response)
         , interests'    = map interestName ⊳ interests title_response
         , stars'        = map displayName  ⊳ stars     title_response
@@ -831,8 +879,8 @@ gbCert response =
 
 ----------------------------------------
 
-gbRating ∷ ∀ ε α ω μ . (MonadIO μ, ToPathPiece α, MonadLog (Log ω) μ, Default ω,
-                        AsIOError ε, MonadError ε μ) =>
+gbRating ∷ ∀ ε α ω μ . (MonadIO μ, ToPathPiece α, AsIOError ε, MonadError ε μ,
+                        HasDoMock ω, HasIOClass ω, Default ω, MonadLog (Log ω) μ) =>
            α → Title → μ (𝕄 Rating)
 
 gbRating tt ttle = do
@@ -857,21 +905,65 @@ fetchImages tt image_target_path = do
   let uri' = imdbApiBase ‡ [toPathPiece tt, [pathPiece|images|]] & queryParams ⊢ params
                where params = [QueryParam [queryKey|types|] [queryValue|poster|]]
   images ⊳ fetchJSON uri' ≫ \ case
-        []    → infoT "No images found"
-        (i:_) → do
-          infoT $ [fmt|Writing %T…|] image_target_path
-          downloadAndResizeImage (url i) image_target_path
+    []    → infoT "No images found"
+    (i:_) → do
+      infoT $ [fmt|Writing %T…|] image_target_path
+      downloadAndResizeImage (url i) image_target_path
 
-{-
-  images ⊳ fetchJSON uri' ≫ \ posterImages → do
-      if null posterImages
-        then infoT "No images found"
-        else do
-          infoT $ [fmt|Writing %T…|] image_target_path
-          case head posterImages of
-            𝓝    → infoT "no image found"
-            𝓙 pI → downloadAndResizeImage (url pI) image_target_path
--}
+----------------------------------------
+
+throwIOErr ∷ ∀ ε γ α μ . (FPathAs γ, AsIOError ε, MonadError ε μ) =>
+             IOErrorType → 𝕋 → 𝕄 Handle → 𝕄 γ → μ α
+throwIOErr t s h p = throwError $ _IOErr # mkIOError t (toString s) h (toString ⊳ p)
+
+throwAlreadyExists ∷ ∀ ε τ γ α μ . (Printable τ,FPathAs γ,AsIOError ε,MonadError ε μ)=>
+                     τ → γ -> μ α
+throwAlreadyExists s = throwIOErr alreadyExistsErrorType (toText s) 𝓝 ∘ 𝓙
+
+----------------------------------------
+
+makeMovie ∷ ∀ ε ρ μ . (MonadIO μ, MonadLog (Log MockIOClass) μ, MonadCatch μ,
+                       HasDoMock ρ, MonadReader ρ μ,
+                       AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
+                       AsIOError ε, Printable ε, MonadError ε μ) =>
+            IMDB_ID → AbsDir → AbsDir → Options → TitleResponse → μ ()
+
+makeMovie tt movies_dir info_dir opts title_response = do
+  let ttle              = title_response ⊣ title
+      file_title        = pathComponent title_response
+      jpg_fname         = fromPC (file_title ⊙ [pc|jpg|])
+      image_target_path = attachment_dir ⫻ jpg_fname
+      attachment_dir    = movies_dir ⫻ [reldir|_attachments/|]
+      md_fname          = fromPC (pathComponent title_response ⊙ [pc|md|])
+      target_path       = movies_dir ⫻ md_fname
+
+  when (opts ⊣ overwrite ≠ Overwrite) $
+    ((≡ FExists) ⊳ fexists Informational NoFExists target_path NoMock) ≫ flip when
+      (throwAlreadyExists tt target_path)
+
+  infoT $ [fmt|writing file %T (%T)|] target_path ttle
+
+  -- Create attachments directory if it doesn't exist
+  -- XXX use something better than Dir, e.g., MockIO
+  ensureDir attachment_dir
+
+  -- Fetch and process images
+  fetchImages tt image_target_path
+
+  -- Fetch certificate
+  gb_rating ← gbRating tt ttle
+  writeMovie tt file_title gb_rating title_response target_path
+
+  let people_dir     = info_dir ⫻ [reldir|people/|]
+      person_dir p   = people_dir ⫻ fromList [personComponent p]
+      person_fn bf p = person_dir p ⫻ __parse__ (bf (personPrefix p))
+
+  forM_ (people opts) $
+    ensureInternalLink file_title ∘ person_fn [fmtT|%t-wants-to-see.md|]
+
+  forM_ (seen opts) $
+    ensureInternalLink file_title ∘ person_fn [fmtT|%t-has-seen.md|]
+
 
 ----------------------------------------
 
@@ -885,47 +977,10 @@ processTitle ∷ ∀ ε ρ μ .
 processTitle info_dir opts tt = do
   let title_uri = imdbApiBase ‡ ҩ tt
   infoT $ [fmt|trying uri: %T|] title_uri
-  maybeTitleResponse ← fetchJSON title_uri
-  case maybeTitleResponse of
-    𝓝 → errT $ [fmt|Failed to fetch title: %T|] tt
-    𝓙 title_response → do
-      let ttle              = title_response ⊣ title
-          file_title        = titleFilename ttle (startYear title_response)
-          movies_dir        = info_dir ⫻ [reldir|movies/|]
-          md_fname          = fromPC (file_title ⊙ [pc|md|])
-          jpg_fname         = fromPC (file_title ⊙ [pc|jpg|])
-          target_path       = movies_dir ⫻ md_fname
-          attachment_dir    = movies_dir ⫻ [reldir|_attachments/|]
-          image_target_path = attachment_dir ⫻ jpg_fname
-      infoT $ [fmt|Fetched title (%T): %T|] tt ttle
-      -- check if the file already exists
-         -- XXX use something better than Dir, e.g., MockIO
-      exists ← liftIO $ Dir.doesFileExist (toString target_path)
-      if exists
-        then infoT $ [fmt|Already exists: %T (%T)|] target_path tt
-        else do
-          infoT $ [fmt|Found title: %T|] ttle
-
-          -- Create attachments directory if it doesn't exist
-          -- XXX use something better than Dir, e.g., MockIO
-          liftIO $ Dir.createDirectoryIfMissing 𝓣 (toString attachment_dir)
-
-          -- Fetch and process images
-          fetchImages tt image_target_path
-
-          -- Fetch certificate
-          gb_rating ← gbRating tt ttle
-          writeMovie tt file_title gb_rating title_response target_path
-
-          let people_dir     = info_dir ⫻ [reldir|people/|]
-              person_dir p   = people_dir ⫻ fromList [personComponent p]
-              person_fn bf p = person_dir p ⫻ __parse__ (bf (personPrefix p))
-
-          forM_ (people opts) $
-            ensureInternalLink file_title ∘ person_fn [fmtT|%t-wants-to-see.md|]
-
-          forM_ (seen opts) $
-            ensureInternalLink file_title ∘ person_fn [fmtT|%t-has-seen.md|]
+  title_response ← fetchJSON title_uri
+  let movies_dir        = info_dir ⫻ [reldir|movies/|]
+  infoT $ [fmt|fetched title (%T): %T|] tt (title_response ⊣ title)
+  makeMovie tt movies_dir info_dir opts title_response
 
 ----------------------------------------
 
