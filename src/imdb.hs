@@ -93,7 +93,7 @@ import Log  ( Log, debugT, infoT, noticeT )
 
 -- logging-effect ----------------------
 
-import Control.Monad.Log  ( MonadLog, Severity( Debug, Informational ) )
+import Control.Monad.Log  ( MonadLog, Severity( Debug ) )
 
 -- mockio-log --------------------------
 
@@ -713,14 +713,14 @@ downloadAndResizeImage image_uri target_path = do
   -- Download the image to a temporary file
   let temp_file_path = target_path ⊙ [pc|tmp|]
   body ← fetchResponse image_uri
-  writeFile Informational 𝓝 (𝓙 0o644) temp_file_path body do_mock
+  writeFile Debug 𝓝 (𝓙 0o644) temp_file_path body do_mock
 
   -- Use ImageMagick to resize the image
   ꙭ ([absfile|/run/current-system/sw/bin/magick|],
      [toText temp_file_path, "-resize", "600x400>", toText target_path])
 
   -- Remove the temporary file
-  unlink Informational temp_file_path do_mock
+  unlink Debug temp_file_path do_mock
 
 ----------------------------------------
 
@@ -730,7 +730,7 @@ writeMD ∷ ∀ ε α ρ μ .
           𝕄 α → [𝕋] → AbsFile → μ ()
 writeMD yaml_m lines fn =
   let content = maybe "" [fmtT|---\n%T---\n|] yaml_m ◇ unlines lines
-  in  asks (view doMock) ≫ writeFile Informational 𝓝 (𝓙 0o644) fn content
+  in  asks (view doMock) ≫ writeFile Debug 𝓝 (𝓙 0o644) fn content
 
 ----------------------------------------
 
@@ -781,7 +781,7 @@ readLastByte' h = asIOError $ (toEnum ∘ fromIntegral) ⊳⊳ readLastByte (h �
 getLastByte ∷ ∀ ε γ ω μ . (MonadIO μ, FileAs γ, AsIOError ε, MonadError ε μ, Printable ε,
                            HasDoMock ω, HasIOClass ω, Default ω, MonadLog (Log ω) μ) =>
               γ → μ (𝕄 ℂ)
-getLastByte fn = withFile Informational 𝓝 Binary FileR (return 𝓝) fn readLastByte' NoMock
+getLastByte fn = withFile Debug 𝓝 Binary FileR (return 𝓝) fn readLastByte' NoMock
 
 ----------------------------------------
 
@@ -802,7 +802,7 @@ ensureTrailingNewline fn = do
     FExists → getLastByte fn ≫ \ case
       𝓝      → return ()
       𝓙 '\n' → return ()
-      𝓙 _    → appendFile Informational 𝓝 𝓝 fn ("\n"∷𝕋) do_mock
+      𝓙 _    → appendFile Debug 𝓝 𝓝 fn ("\n"∷𝕋) do_mock
 
 ----------------------------------------
 
@@ -818,7 +818,7 @@ parseMD ∷ ∀ ε γ ω μ . (MonadIO μ, FileAs γ, AsIOError ε, Printable ε
                        HasDoMock ω, HasIOClass ω, Default ω, MonadLog (Log ω) μ) =>
           γ → μ (𝕄 Object, [𝕋])
 parseMD fn = do
-  readFile Informational 𝓝 (return []) fn NoMock ≫ \ case
+  readFile Debug 𝓝 (return []) fn NoMock ≫ \ case
     ("---" : xs) → let (header, rest) = span (≢ "---") xs
                    in  case decodeEither' @Object (encodeUtf8 $ unlines header) of
                          𝓡 o → return (𝓙 o,rest)
@@ -836,8 +836,8 @@ ensureDir ∷ ∀ ε δ ρ ω μ . (MonadIO μ, DirAs δ, AsIOError ε, Printabl
             δ → μ ()
 ensureDir d = do
   do_mock ← asks (view doMock)
-  ftype ⊳⊳ stat Informational 𝓝 d NoMock ≫ \ case
-    𝓝           → mkdir Informational d 0o755 do_mock
+  ftype ⊳⊳ stat Debug 𝓝 d NoMock ≫ \ case
+    𝓝           → mkdir Debug d 0o755 do_mock
     𝓙 Directory → return ()
     𝓙 ft        → throwUserError ([fmtT|not a directory: %T (got a %w)|] d ft)
 
@@ -848,7 +848,7 @@ appendText ∷ ∀ ε ρ ω μ . (MonadIO μ, AsIOError ε, Printable ε, MonadE
                           Default ω,HasDoMock ω,HasIOClass ω, MonadLog (Log ω) μ) =>
              AbsFile → 𝕋 → μ ()
 appendText file_name text =
-  asks (view doMock) ≫ appendFile Informational 𝓝 (𝓙 0o644) file_name text
+  asks (view doMock) ≫ appendFile Debug 𝓝 (𝓙 0o644) file_name text
 
 ----------------------------------------
 
@@ -929,16 +929,30 @@ throwAlreadyExists s = throwIOErr alreadyExistsErrorType (toText s) 𝓝 ∘ �
 
 ----------------------------------------
 
+writePeopleLinks ∷ ∀ ε ω ρ μ .(MonadIO μ, HasDoMock ρ, MonadReader ρ μ,
+                               Default ω, HasDoMock ω, HasIOClass ω, MonadLog (Log ω) μ,
+                               AsIOError ε, Printable ε, MonadError ε μ) =>
+                   PathComponent → AbsDir → Options → μ ()
+writePeopleLinks file_title info_dir opts = do
+  let people_dir     = info_dir ⫻ [reldir|people/|]
+      person_dir p   = people_dir ⫻ fromList [personComponent p]
+      person_fn bf p = person_dir p ⫻ __parse__ (bf (personPrefix p))
+
+  forM_ (people opts) $
+    ensureInternalLink file_title ∘ person_fn [fmtT|%t-wants-to-see.md|]
+
+  forM_ (seen opts) $
+    ensureInternalLink file_title ∘ person_fn [fmtT|%t-has-seen.md|]
+
 
 
 ----------------------------------------
 
--- | Process a single title
--- processTitle ∷ 𝕋 → Options → IO ()
 processTitle ∷ ∀ ε ρ μ .
                (MonadIO μ, MonadLog (Log MockIOClass) μ, MonadCatch μ,
                 HasDoMock ρ, MonadReader ρ μ,
-                AsFPathError ε, AsIOError ε, AsCreateProcError ε, AsProcExitError ε, Printable ε, MonadError ε μ) =>
+                AsFPathError ε, AsIOError ε, AsCreateProcError ε, AsProcExitError ε,
+                Printable ε, MonadError ε μ) =>
                AbsDir → Options → IMDB_ID → μ ()
 processTitle info_dir opts tt = do
   title_response ← fetchJSON (imdbApiBase ‡ ҩ tt)
@@ -951,27 +965,16 @@ processTitle info_dir opts tt = do
       target_path       = movies_dir ⫻ md_fname
 
   when (opts ⊣ overwrite ≠ Overwrite) $
-    ((≡ FExists) ⊳ fexists Informational NoFExists target_path NoMock) ≫ flip when
+    ((≡ FExists) ⊳ fexists Debug NoFExists target_path NoMock) ≫ flip when
       (throwAlreadyExists tt target_path)
 
   infoT $ [fmt|writing file %T (%T)|] target_path ttle
 
-  -- Fetch and process images
   fetchImages tt file_title movies_dir
-
-  -- Fetch certificate
   gb_rating ← gbRating tt ttle
+
   writeMovie tt file_title gb_rating title_response target_path
-
-  let people_dir     = info_dir ⫻ [reldir|people/|]
-      person_dir p   = people_dir ⫻ fromList [personComponent p]
-      person_fn bf p = person_dir p ⫻ __parse__ (bf (personPrefix p))
-
-  forM_ (people opts) $
-    ensureInternalLink file_title ∘ person_fn [fmtT|%t-wants-to-see.md|]
-
-  forM_ (seen opts) $
-    ensureInternalLink file_title ∘ person_fn [fmtT|%t-has-seen.md|]
+  writePeopleLinks file_title info_dir opts
 
 ----------------------------------------
 
