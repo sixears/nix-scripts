@@ -978,10 +978,9 @@ processTitle info_dir opts tt = do
 
 ----------------------------------------
 
-doMain ∷ ∀ ε μ .
-         (MonadIO μ, MonadLog (Log MockIOClass) μ, MonadCatch μ,
-          AsIOError ε, AsFPathError ε, AsCreateProcError ε, AsProcExitError ε, Printable ε,
-          MonadError ε μ) =>
+doMain ∷ ∀ ε μ . (MonadIO μ, MonadLog (Log MockIOClass) μ, MonadCatch μ,
+                  AsIOError ε, AsFPathError ε, AsCreateProcError ε, AsProcExitError ε,
+                  Printable ε, MonadError ε μ) =>
          DoMock → Options → μ ()
 doMain do_mock opts = do
   cwd ← getCwd
@@ -993,6 +992,11 @@ doMain do_mock opts = do
     if not moviesDirExists
       then throwUserError @_ @𝕋 "run this in an obsidian movies-info dir"
       else Monad.forM_ (tts opts) $ flip runReaderT do_mock ∘ processTitle cwd opts
+    stat Debug 𝓝 [reldir|movies/|] NoMock ≫ \ case
+      𝓝    → throwUserError @_ @𝕋 "no such dir: movies/; run this in a movies-info dir"
+      𝓙 st | ftype st ≡ Directory
+           → forM_ (tts opts) $ flip runReaderT do_mock ∘ processTitle cwd opts
+      𝓙 st → throwUserError $ [fmtT|not a directory: movies (got %T)|] st
 
 ----------------------------------------
 
