@@ -94,23 +94,23 @@ src=~/src
 src_dists=$src/dists
 md $src_dists
 # symlink $nix_home/dists/default.nix $src_dists/
-nabal_parent=$src
-nabal_home=$nabal_parent/nabal
-if [ \! -d $nabal_home/.git ]; then
-  cd $nabal_parent                               || die failed to cd to $nabal_parent
-  git clone git@bitbucket.org:dudebout/nabal.git
-  # cd ~; git clone git://github.com/nixos/nixpkgs
-  # build order: textconv, fmt, fluffy
-  # nabal update
-  # git clone ssh://git@bitbucket.org/Mr_Fluffy/textconv.git
-  # cd ~/src/textconv
-  # nabal install --dependencies-only
-  # nabal build
-  # nabal install (to install into ~/.cabal)
-  # maybe nabal-nix-install
-  # git clone ssh://git@bitbucket.org/Mr_Fluffy/fluffy.git
-fi
-symlink $nabal_home $nix_home
+##nabal_parent=$src
+##nabal_home=$nabal_parent/nabal
+##if [ \! -d $nabal_home/.git ]; then
+##  cd $nabal_parent                               || die failed to cd to $nabal_parent
+##  git clone git@bitbucket.org:dudebout/nabal.git
+##  # cd ~; git clone git://github.com/nixos/nixpkgs
+##  # build order: textconv, fmt, fluffy
+##  # nabal update
+##  # git clone ssh://git@bitbucket.org/Mr_Fluffy/textconv.git
+##  # cd ~/src/textconv
+##  # nabal install --dependencies-only
+##  # nabal build
+##  # nabal install (to install into ~/.cabal)
+##  # maybe nabal-nix-install
+##  # git clone ssh://git@bitbucket.org/Mr_Fluffy/fluffy.git
+##fi
+##symlink $nabal_home $nix_home
 
 # now part of os core
 ## # not relevant on non-wifi devices

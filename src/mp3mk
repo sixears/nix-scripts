@@ -21,7 +21,7 @@ builtin shopt -s dotglob
 
 basename=${pkgs.coreutils}/bin/basename
 false=${pkgs.coreutils}/bin/false
-getopt=${pkgs.utillinux}/bin/getopt
+getopt=${pkgs.util-linux}/bin/getopt
 true=${pkgs.coreutils}/bin/true
 
 progname="$($basename "$0")"

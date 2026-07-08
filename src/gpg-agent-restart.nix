@@ -6,7 +6,7 @@ shopt -s dotglob
 
 ${pkgs.procps}/bin/pkill gpg-agent
 ${pkgs.gnupg}/bin/gpg-agent --options                                          \
-             <(echo 'pinentry-program ${pkgs.pinentry}/bin/pinentry') \
+             <(echo 'pinentry-program ${pkgs.pinentry-curses}/bin/pinentry') \
              --homedir /home/martyn/.gnupg --daemon
 ''
 

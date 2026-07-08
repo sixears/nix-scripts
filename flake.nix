@@ -2,12 +2,12 @@
   description = "home-made scripts";
 
   inputs = {
-    nixpkgs.url     = github:NixOS/nixpkgs/938aa157; # nixos-24.05 2024-06-20
+    nixpkgs.url     = github:NixOS/nixpkgs/667d5cf1; # nixos-26.05 2026-06-26
     flake-utils.url = github:numtide/flake-utils/c0e246b9;
-    hpkgs1.url      = github:sixears/hpkgs1/r0.0.24.0;
+    hpkgs1.url      = github:sixears/hpkgs1/r0.0.58.0;
 #    hpkgs1.url      = path:/home/martyn/src/hpkgs1/;
     bashHeader      = {
-      url    = github:sixears/bash-header/r0.0.3.0;
+      url    = github:sixears/bash-header/r0.0.8.0;
 #      url      = path:/home/martyn/src/bash-header/;
       inputs = { nixpkgs.follows = "nixpkgs"; };
     };
@@ -95,7 +95,7 @@
         # -- haskell utilities ---------
 
         bs2hs = mkHBin "bs2hs" ./src/bs2hs.hs {
-          libs = p: with p; [ parsec-plus-1-1 tasty-plus-1-5 tfmt-0-2 ];
+          libs = p: with p; [ parsec-plus-1-1 tasty-plus-1-5 tfmt ];
         };
 
       in # ---------------------------------------------------------------------
@@ -211,6 +211,24 @@
             crypt-mkfs    = import ./src/crypt-mkfs.nix    { inherit pkgs; };
             crypt-mount   = import ./src/crypt-mount.nix   { inherit pkgs; };
             crypt-unmount = import ./src/crypt-unmount.nix { inherit pkgs; };
+
+            # -- syncthing -------------
+
+            st-cnflcts-dff =
+              import ./src/st-cnflcts-dff.nix { inherit pkgs header; };
+
+            # -- obsidian --------------
+
+            # imdb = import ./src/imdb.nix { inherit pkgs header; };
+            imdb  = (mkHBin "imdb" ./src/imdb.hs {
+              libs = p: with p; with hlib.hpkgs; [
+                yaml http-conduit modern-uri optparse-applicative parsers
+                text-printer
+
+                optparse-plus parser-plus stdmain
+              ];
+            }).pkg;
+
           };
       }
     );

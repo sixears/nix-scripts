@@ -24,7 +24,6 @@ import Base1
 
 import Control.Applicative  ( optional )
 import Control.Concurrent   ( killThread, myThreadId )
-import Data.Function        ( flip )
 import Data.Int             ( Int64 )
 import Data.List            ( reverse )
 import Data.List.NonEmpty   ( uncons )
@@ -39,9 +38,9 @@ import System.FileLock  ( SharedExclusive( Exclusive ) )
 
 -- fpath -------------------------------
 
-import FPath.AbsFile           ( AbsFile )
+import FPath.AbsFile           ( AbsFile, absfile )
 import FPath.AsFilePath        ( AsFilePath )
-import FPath.File              ( File, FileAs )
+import FPath.File              ( File( FileA ), FileAs )
 import FPath.Error.FPathError  ( AsFPathError )
 import FPath.Parseable         ( readM )
 
@@ -125,8 +124,8 @@ newtype PID = PID Word32
 
 instance Parsecable PID where
   parser = let check_bound i = if i > maxBound @Word32
-                               then 𝕷 $ [fmt|%d too big for Word32|] i
-                               else 𝕽 $ fromIntegral i
+                               then 𝓛 $ [fmt|%d too big for Word32|] i
+                               else 𝓡 $ fromIntegral i
             in PID ⊳ convertReadParser check_bound (some digit)
 
 ------------------------------------------------------------
@@ -151,10 +150,10 @@ timeout = lens _timeout (\ o t → o { _timeout = t })
 
 read_delay ∷ 𝕊 → 𝔼 𝕊 Delay
 read_delay s = case readEither @Integer s of
-                 𝕷 e → 𝕷 e
-                 𝕽 i → if i > fromIntegral (maxBound @Int64)
-                       then 𝕷 $ "too big for Int64: " ⊕ s
-                       else 𝕽 $ msDelay (fromIntegral i)
+                 𝓛 e → 𝓛 e
+                 𝓡 i → if i > fromIntegral (maxBound @Int64)
+                       then 𝓛 $ "too big for Int64: " ⊕ s
+                       else 𝓡 $ msDelay (fromIntegral i)
 
 readDelay ∷ ReadM (𝕊,Delay)
 readDelay =
@@ -183,7 +182,7 @@ data Locked = Locked | NotLocked
 
 ----------------------------------------
 
-{- | Read a file; return `𝕹` if there is no file to read. -}
+{- | Read a file; return `𝓝` if there is no file to read. -}
 
 ----------------------------------------
 
@@ -206,13 +205,13 @@ grab_lock_nb fn do_mock = do
   flockNB Notice Exclusive fn do_mock ≫ \ case
     -- Be sure this is the final action; so that the fl gets returned, and thus
     -- the caller has a chance to unlock it.
-    𝕵 fl → return $ Flocked fl
-    𝕹    → do
+    𝓙 fl → return $ Flocked fl
+    𝓝    → do
       txt ← readFile @_ @𝕋 Informational
-                     (𝕵 $ \ f → [fmt|readFile: '%T'|] f) (return "") fn do_mock
+                     (𝓙 $ \ f → [fmt|readFile: '%T'|] f) (return "") fn do_mock
       mpid ← case parsec @PID @ParseError (toString fn) txt of
-               𝕷 e   → info' (toText e) ⪼ return 𝕹
-               𝕽 pid → return $ 𝕵 pid
+               𝓛 e   → info' (toText e) ⪼ return 𝓝
+               𝓡 pid → return $ 𝓙 pid
 
       return $ NotFlocked mpid
 
@@ -236,17 +235,17 @@ find_lock_nb_ ∷ (MonadIO μ,
 find_lock_nb_ fns accum do_mock = do
   let (fn,fns') = uncons fns
   grab_lock_nb fn do_mock ≫ \ case
-    NotFlocked 𝕹 → do
+    NotFlocked 𝓝 → do
       notice' $ [fmtT|Failed to flock '%T'|] fn
       case fns' of
-        𝕹       → return (fn:accum,NotFlocked 𝕹)
-        𝕵 fns'' → find_lock_nb_ fns'' (fn:accum) do_mock
+        𝓝       → return (fn:accum,NotFlocked 𝓝)
+        𝓙 fns'' → find_lock_nb_ fns'' (fn:accum) do_mock
 
-    NotFlocked (𝕵 (PID pid)) → do
+    NotFlocked (𝓙 (PID pid)) → do
       notice' $ [fmtT|Failed to flock '%T': pid <%d> is already queued|] fn pid
       case fns' of
-        𝕹       → return (fn:accum,NotFlocked (𝕵 (PID pid)))
-        𝕵 fns'' → find_lock_nb_ fns'' (fn:accum) do_mock
+        𝓝       → return (fn:accum,NotFlocked (𝓙 (PID pid)))
+        𝓙 fns'' → find_lock_nb_ fns'' (fn:accum) do_mock
 
     Flocked l → return (accum,Flocked l)
 
@@ -284,8 +283,8 @@ doWithLock tid queue io do_mock = do
       l' ← chase_flock (reverse fns) l do_mock
       -- we take care to always unflock the lock file
       case tid of
-        𝕹   → return ()
-        𝕵 t → liftIO $ stopTimer t
+        𝓝   → return ()
+        𝓙 t → liftIO $ stopTimer t
       io l'
 
 ----------------------------------------
@@ -306,7 +305,7 @@ flockProcRun tid do_mock opts = do
       io ∷ NamedFileLock → LoggingT (Log MockIOClass) (ExceptT ε IO) Word8
       io l = do
         (x,()) ← doProc Notice CmdW (unflock Notice l do_mock)
-                        outDef (ℍ stdin "stdin" ReadMode)
+                        outDef (ℍ stdin (FileA [absfile|/dev/stdin|]) ReadMode)
                         (opts ⊣ exe,opts ⊣ args) do_mock
         return $ exit_val x
   doWithLock tid queue_absfiles io do_mock
@@ -328,8 +327,8 @@ myMain ∷ ∀ ε .
 myMain do_mock opts = do
   mainTID ← liftIO myThreadId
   killTID ∷ 𝕄 TimerIO ← liftIO $ case opts ⊣ timeout of
-              𝕹       → return 𝕹
-              𝕵 (s,t) → fmap 𝕵 $ flip oneShotTimer t $ do
+              𝓝       → return 𝓝
+              𝓙 (s,t) → fmap 𝓙 $ flip oneShotTimer t $ do
                 progn ← getProgName
                 hPutStrLn stderr $ [fmt|%s: timed out after %ss|] progn s
                 killThread mainTID

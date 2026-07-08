@@ -6,6 +6,13 @@
 {-# LANGUAGE TypeFamilies           #-}
 {-# LANGUAGE UnicodeSyntax          #-}
 
+-- XXX add ability to re-check everything (e.g., kicked off from USR1); thus
+--     also re-check should clear & restart pending checks, etc.
+-- XXX startup should be just initialize & re-check
+-- XXX write & flock pid file (with option)
+-- XXX write a unix-domain socket (with option)
+-- XXX write a rotating? log file (with option)
+
 import Base1
 import Prelude  ( round )
 

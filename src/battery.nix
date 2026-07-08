@@ -158,8 +158,13 @@ main() {
              split2 = "$l" key val
              if [[ POWER_SUPPLY_ == ''${key:0:13} ]]; then
                uevent[''${key:13}]="$val"
+             elif [[ $key == DEVTYPE ]]; then
+               case $val in
+                 power_supply ) : ;;
+                 *            ) warn "$Progname: unrecognived DEVTYPE '$val'" ;;
+               esac
              else
-               warn "Unrecognized key: '$key' (''${key:0:13})"
+               warn "$Progname: Unrecognized key: '$key' (''${key:0:13})"
              fi
            done < $BATT1UEVENT
 
@@ -255,21 +260,22 @@ Modes:
   loc  ) Show where we're looking for the battery status file.
 
 Options:
- -c | --colour     Force colourized output
- -n | --no-colour  Force monochrome output
- -b | --brief      Give brief (one-line) output.
- -s | --simple     Like brief, but without units, colour and with est. time
-                   remaining in minutes only (for, e.g., gnuplot)
- -v | --verbose    Be more garrulous about happenings.
- --dry-run         Don't make any stateful changes to the world.
- --debug           Output additional statements to help developers debug.
- --help            This help text.
+ -k | --okay-no-batt  Exit 0 if no battery found
+ -c | --colour        Force colourized output
+ -n | --no-colour     Force monochrome output
+ -b | --brief         Give brief (one-line) output.
+ -s | --simple        Like brief, but without units, colour and with est. time
+                      remaining in minutes only (for, e.g., gnuplot)
+ -v | --verbose       Be more garrulous about happenings.
+ --dry-run            Don't make any stateful changes to the world.
+ --debug              Output additional statements to help developers debug.
+ --help               This help text.
 EOF
 )"
 
 orig_args=("$@")
-getopt_args=( -o vbncs
-              --long colour,no-colour,brief,simple
+getopt_args=( -o vbncsk
+              --long colour,no-colour,brief,simple,okay-no-batt
               --long verbose,dry-run,help,debug
             )
 OPTS=$( ''${Cmd[getopt]} "''${getopt_args[@]}" -n "$Progname" -- "$@" )
@@ -281,16 +287,19 @@ eval set -- "$OPTS"
 
 artist=""
 users=()
+okay_no_batt=false
 while true; do
   case "$1" in
-    -b | --brief       ) Brief=true   ; shift ;;
-    -s | --simple      ) Simple=true  ; shift ;;
-    -c | --colour      ) Colour=true  ; shift ;;
-    -n | --no-colour   ) Colour=false ; shift ;;
+    -b | --brief        ) Brief=true           ; shift ;;
+    -s | --simple       ) Simple=true          ; shift ;;
+    -c | --colour       ) Colour=true          ; shift ;;
+    -n | --no-colour    ) Colour=false         ; shift ;;
+    -k | --okay-no-batt ) okay_no_batt=true    ; shift ;;
+
     # !!! don't forget to update usage !!!
-    -v | --verbose  ) Verbose=$((Verbose+1))   ; shift   ;;
-    --help          ) usage                              ;;
-    --dry-run       ) DryRun=true              ; shift   ;;
+    -v | --verbose  ) Verbose=$((Verbose+1))   ; shift ;;
+    --help          ) usage                            ;;
+    --dry-run       ) DryRun=true              ; shift ;;
     --debug         ) Debug=true               ; shift ;;
     --              ) args+=("''${@:2}")       ; break ;;
     *               ) args+=("$1")             ; shift ;;
@@ -301,6 +310,10 @@ debug "CALLED AS: $(showcmd "$0" "''${orig_args[@]}")"
 
 if $Brief && $Simple; then
   dieusage "Choose --brief(-b) or --simple(-s) but not both!"
+fi
+
+if $okay_no_batt && [[ ! -d $BATT1 ]]; then
+  exit 0
 fi
 
 case ''${#args[@]} in

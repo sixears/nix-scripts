@@ -28,7 +28,7 @@ shopt -s dotglob
 # extglob: Enable ?(pattern) *(pattern) +(pattern) @(pattern) !(pattern)
 shopt -s extglob
 
-Cmd[eyeD3]=${pkgs.python3Packages.eyeD3}/bin/eyeD3
+Cmd[eyeD3]=${pkgs.python3Packages.eyed3}/bin/eyeD3
 Cmd[iconv]=${pkgs.glibc.bin}/bin/iconv
 Cmd[id3v2]=${pkgs.id3v2}/bin/id3v2
 Cmd[jq]=${pkgs.jq}/bin/jq

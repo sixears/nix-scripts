@@ -17,10 +17,10 @@ use IPC::System::Simple  qw( systemx );
 use Readonly             qw( Readonly );
 
 Readonly my $UNZIP  => '${pkgs.unzip}/bin/unzip';
-Readonly my $GQVIEW => '${pkgs.gqview}/bin/gqview';
+Readonly my $GTHUMB => '${pkgs.gthumb}/bin/gthumb';
 
 my ($GQView, $CurDir) = (0) x 2;
-GetOptions( 'gq'       => \$GQView
+GetOptions( 'g'        => \$GThumb
           , 'curdir|c' => \$CurDir
           )
   or die "options parsing failed\n";
@@ -33,8 +33,8 @@ for my $fn (@ARGV) {
   push @cmd, $fn;
   systemx @cmd;
   unlink $fn;
-  if ( $GQView ) {
-    my @cmd2 = ($GQVIEW, $CurDir ? '.' : $b);
+  if ( $GThumb ) {
+    my @cmd2 = ($GThumb, $CurDir ? '.' : $b);
     systemx @cmd2;
   }
 }

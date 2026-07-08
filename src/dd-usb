@@ -29,7 +29,7 @@ CMD[basename]=${pkgs.coreutils}/bin/basename
 # This ensures we don't have to worry about quoting when we use ''${CMD[cmd]}
 CMD[cat]=${pkgs.coreutils}/bin/cat
 CMD[date]=${pkgs.coreutils}/bin/date
-CMD[getopt]=${pkgs.utillinux}/bin/getopt
+CMD[getopt]=${pkgs.util-linux}/bin/getopt
 
 CMD[dd]=${pkgs.coreutils}/bin/dd
 CMD[pv]=${pkgs.pv}/bin/pv
