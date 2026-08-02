@@ -219,13 +219,15 @@
 
             # -- obsidian --------------
 
-            # imdb = import ./src/imdb.nix { inherit pkgs header; };
+            # imdb  = nixpkgs.lib.debug.traceSeqN 1 (mkHBin "imdb" ./src/imdb.hs {
             imdb  = (mkHBin "imdb" ./src/imdb.hs {
               libs = p: with p; with hlib.hpkgs; [
                 yaml http-conduit modern-uri optparse-applicative parsers
                 text-printer
 
-                optparse-plus parser-plus stdmain
+                # we don't want to pick up duration from the main
+                # (not-owned-by-me) set
+                hpkgs.duration optparse-plus parser-plus stdmain
               ];
             }).pkg;
 
